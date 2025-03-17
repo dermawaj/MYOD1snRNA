@@ -2,150 +2,98 @@
 #####tumorigenic MRs########################
 #differential expression between MYOD1 sc vs normal skeletal muscle####
 #####diff expression (cell level and pseudo-bulk) by response######
-option(Seurat.object.assay.version = 'v5')
-mart <- readRDS("/path/scRNA/functions/mart.obj.rds")
-setwd("/path/scRNA/RMS/seurat/ARACNe")
-MYOD1.integrated.vp <- readRDS("MYOD1.integrated.filt.vp.network.sample_network.indiv.sample.rds")
-MYOD1.obj.integrated <- readRDS(file = "MYOD1.obj.filt.integrated.v2.rds")
-MYOD1.obj <- CreateAssay5Object(counts = MYOD1.obj.integrated[["SCT"]]@counts, data = MYOD1.obj.integrated[["SCT"]]@data)
-##
-muscle.raw.obj <- readRDS(file = "/path/scRNA/RMS/9b34eb5c-1fb2-46c5-9fe4-d90a2e5f7c4b.rds")
-muscle.raw.obj <- SCTransform(muscle.raw.obj, verbose = T, conserve.memory = T)
-muscle.obj <- CreateAssay5Object(counts = muscle.raw.obj[["SCT"]]@counts, data = muscle.raw.obj[["SCT"]]@data)
-
-genes <- row.names(muscle.obj)
-gene_hgnc <- getBM(filters= c("ensembl_gene_id"), attributes= c("ensembl_gene_id","hgnc_symbol"),
-                   values=genes, mart= mart)
-hgnc <- gene_hgnc$hgnc_symbol[match(genes, gene_hgnc$ensembl_gene_id)]
-hgnc <- hgnc[hgnc != ""]
-common <- intersect(row.names(MYOD1.obj), hgnc)
-MYOD1.obj <- subset(MYOD1.obj, features = common)
-gene_ensembl <- getBM(filters= c("hgnc_symbol"), attributes= c("ensembl_gene_id","hgnc_symbol"),
-                      values=common, mart= mart)
-ensembl <- gene_ensembl$ensembl_gene_id[match(common, gene_ensembl$hgnc_symbol)]
-muscle.obj <- subset(muscle.obj, features = ensembl)
-saveRDS(muscle.obj, file = "/path/scRNA/RMS/TabulaSapiens_muscle.rds")
-muscle.obj <- readRDS(file = "/path/scRNA/RMS/TabulaSapiens_muscle.rds")
-genes <- row.names(muscle.obj)
-gene_hgnc <- getBM(filters= c("ensembl_gene_id"), attributes= c("ensembl_gene_id","hgnc_symbol"),
-                   values=genes, mart= mart)
-hgnc <- gene_hgnc$hgnc_symbol[match(genes, gene_hgnc$ensembl_gene_id)]
-row.names(muscle.obj) <- hgnc
-MYOD1.obj <- subset(MYOD1.obj, features = hgnc)
-
-MYOD1.obj.dat <- as.matrix(MYOD1.obj@layers$data)
-colnames(MYOD1.obj.dat) <- colnames(MYOD1.obj)
-#colnames(MYOD1.obj.dat) <- sub("_.*", "", colnames(MYOD1.obj.dat))
-rownames(MYOD1.obj.dat) <- rownames(MYOD1.obj)
-
-set.seed(123)
-selected_columns <- sample(ncol(MYOD1.obj.dat), ncol(muscle.obj.dat))
-MYOD1.obj.dat_subset <- MYOD1.obj.dat[, selected_columns]
-
-#by subcluster
-MYOD1.obj.integrated$sample_cluster <- MYOD1.integrated.vp$sample_cluster ##tbd
-library(limma)
-sample_cluster <- MYOD1.integrated.vp$sample_cluster
-# na_indices <- which(is.na(sample_cluster))
-# if(length(na_indices) > 0) {
-#   sample_cluster <- sample_cluster[-na_indices]
-#   MYOD1.vp.dat <- MYOD1.vp.dat[, -na_indices]
-# }
-combined_matrix <- cbind(MYOD1.obj.dat, muscle.obj.dat)
-group <- factor(c(as.character(sample_cluster), rep("muscle", ncol(muscle.obj.dat))))
-design <- model.matrix(~0 + group)
-colnames(design) <- levels(group)
-fit <- lmFit(combined_matrix, design)
-subclusters <- sort(unique(MYOD1.integrated.vp@meta.data$sample_cluster))
-contrast_formula <- paste(subclusters, "- muscle")
-contrast_matrix <- makeContrasts(contrasts = contrast_formula, levels = design)
-fit2 <- contrasts.fit(fit, contrast_matrix)
-fit2 <- eBayes(fit2)
-top_genes_list <- list()
-for (contrast_name in colnames(contrast_matrix)) {
-  top_genes <- topTable(fit2, coef = contrast_name, adjust = "fdr", number = Inf)
-  top_genes$Comparison <- contrast_name
-  top_genes_list[[contrast_name]] <- top_genes
+CPM_normalization <- function(dset){
+  dset.log2cpm <- apply(dset,2,function(x){
+    y <- 1E6*x/sum(x) + 1
+    z <- log(y,2)
+    return(z)
+  })
+  return(dset.log2cpm)
 }
-combined_top_genes <- do.call(rbind, top_genes_list)
-write.csv(combined_top_genes, file = "MYOD1_subcluster_muscle_diffexp_limma_gene.csv")
 
-####viper on diff exp subclusters vs muscle####
-setwd("/path/scRNA/RMS/seurat/ARACNe")
+GES_scaled <- function(dset, ref){
+  ref.mean <- apply(ref, 1, mean)
+  ref.sd <- apply(ref, 1, sd)
+  dset.ges <- apply(dset, 2, function(x){(x - ref.mean) / ref.sd})
+  dset.ges <- dset.ges[is.finite(rowSums(dset.ges)),]
+  return(dset.ges)
+}
+
+muscle.raw.obj <- readRDS(file = "/path/scRNA/RMS/9b34eb5c-1fb2-46c5-9fe4-d90a2e5f7c4b.rds")
+muscle.dat <- as.matrix(muscle.raw.obj@assays$RNA@counts)
+muscle.cpm <- CPM_normalization(muscle.dat)
+rm(muscle.dat)
+
+mart <- readRDS("/path/scRNA/functions/mart.obj.rds")
+
 sample <- c("MYOD1_RMS_3_2", "MYOD1_RMS_31_2", "MYOD1_RMS_41B", "MYOD1_RMS_211_2", "MYOD1_RMS_469", "MYOD1_RMS_475")
 filenames <- list.files("/path/scRNA/RMS/seurat/ARACNe/network_samples", pattern="*.rds", full.names=TRUE)
 nets <- lapply(filenames, readRDS)
 names(nets) <- sample
-combined_top_genes <- read.csv("MYOD1_subcluster_muscle_diffexp_limma_gene.csv") %>% column_to_rownames("X") 
-combined_top_genes$Gene <- sub(".*\\.", "", rownames(combined_top_genes))
-dat <- combined_top_genes %>% dplyr::select(Comparison, Gene, t) %>%
-  pivot_wider(names_from = "Comparison", values_from = t) %>%
-  column_to_rownames("Gene")
-genes <- rownames(dat)
-mart <- readRDS("/path/scRNA/functions/mart.obj.rds")
-gene_ensembl <- getBM(filters = c("hgnc_symbol"), attributes = c("ensembl_gene_id", "hgnc_symbol"),
-                      values = genes, mart = mart)
-ensembl <- gene_ensembl$ensembl_gene_id[match(genes, gene_ensembl$hgnc_symbol)]
-row.names(dat) <- ensembl
-vp <- viper(dat, nets, method = 'none')
-genes <- rownames(vp)
+setwd("/path/scRNA/RMS")
+sample.obj <- lapply(sample, function(s) readRDS(file = paste0(s, '_subset.rds')))
+
+all_vp_RMS <- list()
+for (s in seq_along(sample)) {
+  MYOD1.dat <- as.matrix(sample.obj[[s]]@assays$RNA@layers$counts)
+  genes <- row.names(sample.obj[[s]])
+  gene_ensembl <- getBM(filters = c("hgnc_symbol"), attributes = c("ensembl_gene_id", "hgnc_symbol"),
+                        values = genes, mart = mart)
+  ensembl <- gene_ensembl$ensembl_gene_id[match(genes, gene_ensembl$hgnc_symbol)]
+  row.names(MYOD1.dat) <- ensembl
+  MYOD1.dat <- MYOD1.dat[!is.na(rownames(MYOD1.dat)), ]
+  colnames(MYOD1.dat) <- colnames(sample.obj[[s]])
+  MYOD1.cpm <- CPM_normalization(MYOD1.dat) #run CPM_normalization function on raw count matrix sample by sample
+  common_genes <- intersect(rownames(MYOD1.cpm), rownames(muscle.cpm))
+  MYOD1.cpm <- MYOD1.cpm[match(common_genes, rownames(MYOD1.cpm)), ]
+  muscle.cpm <- muscle.cpm[match(common_genes, rownames(muscle.cpm)), ]
+  dat <- GES_scaled(MYOD1.cpm, muscle.cpm) #differential gene expression relative to muscle
+  rm(MYOD1.dat, MYOD1.cpm)
+  gc()
+  # MYOD1_muscle_diffexp[[sample[s]]] <- MYOD1.ges
+  colnames(dat) <- paste0(colnames(dat), "_", s)
+  # vp <- viper(dat, nets, method = 'none')
+  indices <- seq(1, ncol(dat), by = 400)
+  seurat_viper_list <- list()
+  for (i in 1:(length(indices) - 1)) {
+    vp <- viper(dat[, indices[i]:indices[i + 1]], nets, method = 'none') #use this scaled signature in viper using methods = none 
+    seurat_viper_list <- c(seurat_viper_list, list(vp))
+  }
+  vp <- viper(dat[, indices[length(indices)]:ncol(dat)], nets, method = 'none')
+  seurat_viper_list <- c(seurat_viper_list, list(vp))
+  vp_RMS <- seurat_viper_list[[1]]
+  for (i in 2:length(seurat_viper_list)) {
+    vp_RMS <- cbind(vp_RMS, seurat_viper_list[[i]])
+  }
+  all_vp_RMS[[sample[s]]] <- vp_RMS
+  setwd("/path/scRNA/RMS/seurat/ARACNe")
+  saveRDS(vp_RMS, paste0(sample[s], '_diffexp_muscle.viper.sample_network.rds'))
+}
+combined_vp_RMS <- do.call(cbind, all_vp_RMS)
+genes <- row.names(combined_vp_RMS)
 gene_hgnc <- getBM(filters = c("ensembl_gene_id"), attributes = c("ensembl_gene_id", "hgnc_symbol"),
-                   values = genes, mart = mart)
+                      values = genes, mart = mart)
 hgnc <- gene_hgnc$hgnc_symbol[match(genes, gene_hgnc$ensembl_gene_id)]
-row.names(vp) <- hgnc
-write.csv(vp, file = "MYOD1_subcluster_muscle_diffexp_viper_gene.csv")
-
-############
-#subset with OncoTarget
+row.names(combined_vp_RMS) <- hgnc
+combined_vp_RMS <- combined_vp_RMS[!is.na(rownames(combined_vp_RMS)), ]
 setwd("/path/scRNA/RMS/seurat/ARACNe")
-vp <- read.csv("MYOD1_subcluster_muscle_diffexp_viper_gene.csv", row.names = 1)
-colnames(vp) <- gsub("\\.\\.\\.muscle", "", colnames(vp))
-colnames(vp) <- gsub("_(cluster)_", ".\\1", colnames(vp))
-OncoTarget <- read.csv("/path/scRNA/functions/oncotarget.csv")
-vp_ot <- vp[rownames(vp) %in% OncoTarget$Target,]
-write.csv(vp_ot, file = "MYOD1_subcluster_muscle_diffexp_viper_gene_oncotarget.csv")
-vp_ot <- read.csv("MYOD1_subcluster_muscle_diffexp_viper_gene_oncotarget.csv", row.names = 1)
+saveRDS(combined_vp_RMS, file = "MYOD1_muscle_diffexp.viper.sample_network.rds")
 
-df <- read.csv("MYOD1.integrated.filt.vp.subclusters.group.csv")
-df <- df[!grepl("MYOD1_PDX", df$subcluster), ]
-cluster <- df$subcluster
-group <- df$cluster
-heatmap_matrix <- vp_ot
-heatmap_matrix <- heatmap_matrix[, match(cluster, colnames(heatmap_matrix))]
+##topMRs###
+get_top_genes <- function(matrix, n = 20) {
+  selected_genes <- unique(unlist(lapply(seq_len(ncol(matrix)), function(i) {
+    col_data <- matrix[, i]
+    names(col_data) <- rownames(matrix)
+    top_genes <- names(sort(col_data, decreasing = TRUE)[seq_len(min(n, length(col_data)))])
+    bottom_genes <- names(sort(col_data, decreasing = FALSE)[seq_len(min(n, length(col_data)))])
+    # print(top_genes)
+    return(c(top_genes,bottom_genes))
+  })))
+  return(selected_genes)
+}
+(selected_genes <- get_top_genes(combined_matrix, n = 500))
 
-row_variances <- apply(heatmap_matrix, 1, var, na.rm = TRUE)
-top20_indices <- order(row_variances, decreasing = TRUE)[1:20]
-heatmap_matrix <- heatmap_matrix[top20_indices, ]
-heatmap_matrix
-
-annotation <- data.frame(Subcluster = cluster, Group = group)
-rownames(annotation) <- annotation$Subcluster
-anno.colors <- list(Group = c("1" = "#08519c", "2" = "#e31a1c", "3" = "#1a9850", "4" = "#6a3d9a"))
-annotation_df <- data.frame(Group = group)
-
-group_order <- annotation$Group[match(colnames(heatmap_matrix), annotation$Subcluster)]
-gaps_col <- which(diff(as.numeric(factor(group_order))) != 0)
-paletteLength <- 60
-myColor <- colorRampPalette(rev(brewer.pal(n = 8, name = "RdBu")))(paletteLength)
-myBreaks <- c(seq(min(vp_ot), 0, length.out = ceiling(paletteLength / 2) + 1), 
-              seq(max(vp_ot) / paletteLength, max(vp_ot), length.out = floor(paletteLength / 2)))
-
-pdf("MYOD1_subcluster_muscle_diffexp_viper_gene_oncotarget_heatmap.v2.top20.pdf", height = 5, width = 5)
-pheatmap(heatmap_matrix, 
-         cluster_rows = TRUE, 
-         treeheight_row = 0, 
-         cluster_cols = FALSE, 
-         show_rownames = TRUE, 
-         show_colnames = TRUE, 
-         fontsize_row = 8, 
-         fontsize_col = 6,
-         color = myColor,
-         breaks = myBreaks,
-         annotation_col = annotation_df,
-         annotation_colors = anno.colors,
-         gaps_col = gaps_col,
-         main = "")
-dev.off()
+                     
 ############
 ###Oncotarget#####
 # convert NES scores to pvalues ( < 10 ^-5 converted to log scale)
@@ -168,10 +116,7 @@ tmp <- filterRowMatrix(vpmat.oncotarget.pval,pos)
 tmp <- tmp[order(rowMeans(tmp), decreasing = TRUE), ]
 colnames(tmp) <- gsub("\\.\\.\\.muscle", "", colnames(tmp))
 colnames(tmp) <- gsub("_(cluster)_", ".\\1", colnames(tmp))
-# df <- read.csv("MYOD1.integrated.filt.vp.network_sample.indiv.sample.individualclusters.combined_matrix_viper_similarity.silinfo.csv",
-#                row.names = 1)
-# cluster <- rownames(df)
-# group <- df$cluster
+
 df <- read.csv("MYOD1.integrated.filt.vp.subclusters.group.csv")
 df <- df[!grepl("MYOD1_PDX", df$subcluster), ]
 cluster <- df$subcluster
@@ -180,87 +125,35 @@ tmp <- tmp[, match(cluster, colnames(tmp))]
 
 annotation <- data.frame(Subcluster = cluster, Group = group)
 rownames(annotation) <- annotation$Subcluster
-anno.colors <- list(Group = c("1" = "#08519c", "2" = "#e31a1c", "3" = "#1a9850", "4" = "#6a3d9a"))
+anno.colors <- list(Group = c("differentiated" = "#08519c", "progenitor" = "#e31a1c", "intermediate" = "#6a3d9a"))
 
 group_order <- annotation$Group[match(colnames(tmp), annotation$Subcluster)]
 gaps_col <- which(diff(as.numeric(factor(group_order))) != 0)
 
 paletteLength <- 100
-myColor <- colorRampPalette(c("blue", "white", "red"))(paletteLength)
+myColor <- colorRampPalette(c("white", "red"))(paletteLength)
 myBreaks <- c(seq(min(tmp, na.rm = TRUE), 1, length.out = ceiling(paletteLength / 2) + 1), 
               seq(1 + 1e-6, max(tmp, na.rm = TRUE), length.out = floor(paletteLength / 2)))
 
-pdf("MYOD1_subcluster_muscle_diffexp_viper_gene_oncotarget_heatmap_Significant10Percent.v2.pdf", height = 5, width = 7)
+pdf("MYOD1_subcluster_muscle_diffexp_viper_gene_oncotarget_heatmap_Significant10Percent.pdf", height = 5, width = 7)
 pheatmap(tmp, 
-         cluster_rows = TRUE, 
-         treeheight_row = 0, 
-         cluster_cols = TRUE, 
-         show_rownames = TRUE, 
-         show_colnames = TRUE, 
-         fontsize_row = 8, 
-         fontsize_col = 6,
-         color = myColor,
-         breaks = myBreaks,
-         annotation_col = annotation,
-         annotation_colors = anno.colors,
-         gaps_col = gaps_col,
-         main = "")
+          cluster_rows = TRUE, 
+          treeheight_row = 0, 
+          cluster_cols = F, 
+          show_rownames = TRUE, 
+          show_colnames = TRUE, 
+          fontsize_row = 8, 
+          fontsize_col = 6,
+          color = myColor,
+          breaks = myBreaks,
+          annotation_col = annotation,
+          annotation_colors = anno.colors,
+          gaps_col = gaps_col,
+          main = "")
 dev.off()
+
 ############
 
-###heatmap###
-rows_to_remove <- grep("^RPS|^RPL", rownames(vp), value = TRUE)
-vp <- vp[!rownames(vp) %in% rows_to_remove, ]
-gene_variances <- apply(vp, 1, var)
-top50_genes <- names(sort(gene_variances, decreasing = TRUE))[1:50]
-top50_genes <- names(sort(gene_variances, decreasing = TRUE))[1:40]
-top50_vp <- vp[top50_genes, ]
-#muscle genes
-prefixes <- c("MYH", "MYL", "MYO", "PAX3", "PAX7", "SMOC", "CALD", "PDGFR", "ACT", "DES", "TNN")
-pattern <- paste0("^(", paste(prefixes, collapse = "|"), ")")
-muscle_genes <- grep(pattern, rownames(vp), value = TRUE)
-top50_vp <- vp[muscle_genes, ]
-
-dat <- as.matrix(top50_vp)
-# Create the heatmap
-dat <- dat[order(rowMeans(dat), decreasing = TRUE), ]
-colnames(dat) <- gsub("\\.\\.\\.muscle", "", colnames(dat))
-colnames(dat) <- gsub("_(cluster)_", ".\\1", colnames(dat))
-
-df <- read.csv("MYOD1.integrated.filt.vp.subclusters.group.csv")
-df <- df[!grepl("MYOD1_PDX", df$subcluster), ]
-cluster <- df$subcluster
-group <- df$cluster
-dat <- dat[, match(cluster, colnames(dat))]
-
-annotation <- data.frame(Subcluster = cluster, Group = group)
-rownames(annotation) <- annotation$Subcluster
-anno.colors <- list(Group = c("1" = "#08519c", "2" = "#e31a1c", "3" = "#1a9850", "4" = "#6a3d9a"))
-
-group_order <- annotation$Group[match(colnames(dat), annotation$Subcluster)]
-gaps_col <- which(diff(as.numeric(factor(group_order))) != 0)
-
-paletteLength <- 60
-myColor <- colorRampPalette(rev(brewer.pal(n = 8, name = "RdBu")))(paletteLength)
-myBreaks <- c(seq(min(dat), 0, length.out = ceiling(paletteLength / 2) + 1), 
-              seq(max(dat) / paletteLength, max(dat), length.out = floor(paletteLength / 2)))
-pdf("MYOD1_subclusters_vp_genes_muscle_diffexp_heatmap.v4.pdf", height = 8, width = 8)
-pdf("MYOD1_subclusters_vp_musclegenes_muscle_diffexp_heatmap.v3.pdf", height = 5, width = 8)
-pheatmap(dat, 
-         cluster_rows = TRUE, 
-         treeheight_row = 0, 
-         cluster_cols = FALSE, 
-         show_rownames = TRUE, 
-         show_colnames = TRUE, 
-         fontsize_row = 8, 
-         fontsize_col = 6,
-         color = myColor,  
-         breaks = myBreaks,
-         annotation_col = annotation,
-         annotation_colors = anno.colors,
-         gaps_col = gaps_col,
-         main = "")
-dev.off()
 
 ##########################################
 ###bulk vs normal muscle sample by sample####
@@ -315,11 +208,12 @@ vpmat <- viper(dset.ges, regulon = nets, cores = 2, verbose = TRUE, method = 'no
 
 genes <- row.names(vpmat)
 gene_hgnc <- getBM(filters= c("ensembl_gene_id"), attributes= c("ensembl_gene_id","hgnc_symbol"),
-                   values=genes, mart= mart)
+                    values=genes, mart= mart)
 hgnc <- gene_hgnc$hgnc_symbol[match(genes, gene_hgnc$ensembl_gene_id)]
 row.names(vpmat) <- hgnc
 
 write.csv(vpmat, file = "MYOD1_bulk_vs_muscle_diffexp_viper.csv", row.names = TRUE)
+
 
 ###heatmap###
 vpmat <- read.csv("MYOD1_bulk_vs_muscle_diffexp_viper.csv", row.names = 1)
