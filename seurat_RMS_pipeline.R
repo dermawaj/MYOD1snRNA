@@ -622,7 +622,6 @@ setwd("/data/vanderbilt/dermawaj/scRNA/RMS/seurat/ARACNe")
 MYOD1.obj.integrated.cytotrace <- readRDS(file = "MYOD1.obj.filt.integrated.cytotrace.v2.rds")
 cytoGenes <- MYOD1.obj.integrated.cytotrace$cytoGenes
 df <- read.csv("MYOD1.integrated.filt.vp.subclusters.group.csv") %>% arrange(cluster)
-df <- df[!grepl("MYOD1_PDX", df$subcluster), ]
 cluster <- df$subcluster
 group <- df$cluster
 
