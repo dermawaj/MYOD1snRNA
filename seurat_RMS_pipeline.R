@@ -865,6 +865,243 @@ pdf(paste0('MYOD1.integrated.filt.vp.network.sample_network.indiv.sample.viper_s
     stat_compare_means(comparisons = comparisons1, method = "t.test", p.adjust.method = "bonferroni", label = "p.signif") +
     theme_minimal() #+
 dev.off()
+              
+##########################################
+###MYOD1 bulk##########
+#Normalize the bulk gene expression by log2CPM 
+MYOD1_bulk <- read.delim("MYOD1_COUNT.txt") 
+MYOD1_bulk$SAMPLESID <- sub("\\..*", "", MYOD1_bulk$SAMPLESID)
+MYOD1_bulk <- MYOD1_bulk %>% column_to_rownames("SAMPLESID")
+dat <- as.matrix(MYOD1_bulk)
+#normalize counts
+CPM_normalization <- function(dset){
+  dset.log2cpm <- apply(dset,2,function(x){
+    y <- 1E6*x/sum(x) + 1
+    z <- log(y,2)
+    return(z)
+  })
+  return(dset.log2cpm)
+}
+bulkmatrix <- CPM_normalization(dat)
+
+#viper
+sample <- c("MYOD1_RMS_3_2", "MYOD1_RMS_31_2", "MYOD1_RMS_41B", "MYOD1_RMS_211_2", "MYOD1_RMS_469", "MYOD1_RMS_475")
+filenames <- list.files("/path/RMS/seurat/ARACNe/network_samples", pattern="*.rds", full.names=TRUE)
+nets <- lapply(filenames, readRDS)
+names(nets) <- sample
+
+vpmat <- viper(bulkmatrix, nets, method="scale") # internally scaled viper signature
+
+mart <- readRDS("/path/mart.obj.rds")
+genes <- row.names(vpmat)
+gene_hgnc <- getBM(filters= c("ensembl_gene_id"), attributes= c("ensembl_gene_id","hgnc_symbol"),
+                  values=genes, mart= mart)
+hgnc <- gene_hgnc$hgnc_symbol[match(genes, gene_hgnc$ensembl_gene_id)]
+row.names(vpmat) <- hgnc
+
+write.csv(vpmat, file = "MYOD1_bulk_viper.csv")
+
+#viper similarity of bulk samples#
+vpmat <- read.csv("MYOD1_bulk_viper.csv", row.names = 1)
+vpsim <- viperSimilarity(vpmat, nn = 100, method = c("two.sided")) # can try all or setting nn=50 or 100 #distance matrix
+vpmat.cluster <- pamk(data=vpsim, krange=2:5)$pamobject
+vpmat.cluster$silinfo # see what average silhouette scores you get with optimal k or different k’s
+#generate heatmap ordered by the silhouette score
+df <- as.data.frame(vpmat.cluster$silinfo$widths)
+write.csv(df, "MYOD1_bulk_viperSimilarity_cluster.csv")
+cluster <- rownames(vpmat.cluster$silinfo$widths)
+group <- df$cluster
+
+#top 100
+vpsim <- vpsim[match(cluster, rownames(vpsim)), match(cluster, colnames(vpsim))]
+annotation <- data.frame(Subcluster = cluster, Group = group)
+rownames(annotation) <- annotation$Subcluster
+anno.colors <- list(Group = c("2" = "#08519c", "3" = "#e31a1c", "1" = "#1a9850"))
+#cols = colorRampPalette(c("blue", "white", "red"))(100)
+paletteLength <- 60
+myColor <- colorRampPalette((rev(brewer.pal(n = 8, name = "RdBu"))))(paletteLength)
+myBreaks <- c(seq(min(vpsim), 0, length.out = ceiling(paletteLength/2) + 1), 
+              seq(max(vpsim)/paletteLength, max(vpsim), length.out = floor(paletteLength/2)))
+
+pheatmap(vpsim, cluster_rows = FALSE, cluster_cols = FALSE, 
+         show_rownames = TRUE, show_colnames = TRUE, 
+         fontsize_row = 6, fontsize_col = 6,
+         color = myColor,
+         breaks = myBreaks,
+         main = "Viper Similarity Matrix",
+         annotation_col = annotation,
+         annotation_colors = anno.colors) 
+
+#compare with integrated sc matrix###
+combined_matrix <- read.csv("MYOD1.integrated.filt.vp.network_sample.indiv.sample.individualclusters.combined_matrix.mean.csv", row.names = 1)
+df <- read.csv("MYOD1.integrated.filt.vp.subclusters.group.csv") %>% arrange(cluster)
+cluster <- df$subcluster
+group <- df$cluster
+combined_matrix <- combined_matrix[, match(cluster, colnames(combined_matrix))]
+combined_matrix <- combined_matrix[!grepl("RPL|RPS", rownames(combined_matrix)), ]
+
+stouffersMethod <- function(x, weights) {
+  return(sum(x * weights) / sqrt(sum(weights * weights)))
+}
+combined_matrix <- combined_matrix[, match(cluster, colnames(combined_matrix))]
+grouped_clusters <- split(colnames(combined_matrix), group)
+results_list <- list()
+for (group_name in names(grouped_clusters)) {
+  subcluster_names <- grouped_clusters[[group_name]]
+  subcluster_matrix <- combined_matrix[, subcluster_names, drop = FALSE]
+  weights <- rep(1, ncol(subcluster_matrix))
+  integrated_results <- apply(subcluster_matrix, 1, stouffersMethod, weights = weights)
+  results_list[[group_name]] <- integrated_results
+}
+integrated_sc_matrix <- do.call(cbind, results_list)
+
+vpmat <- read.csv("/data/vanderbilt/dermawaj/scRNA/RMS/MYOD1_bulk/MYOD1_bulk_viper.csv", row.names = 1)
+vpsim <- viperSimilarity(vpmat, nn = 100, method = c("two.sided"))
+stouffersMethod <- function(x, weights) {
+  return(sum(x * weights) / sqrt(sum(weights * weights)))
+}
+vpmat.cluster <- pamk(data=vpsim, krange=2:5)$pamobject
+vpmat.cluster$silinfo # see what average silhouette scores you get with optimal k or different k’s
+#generate heatmap ordered by the silhouette score
+df <- as.data.frame(vpmat.cluster$silinfo$widths)
+cluster <- rownames(vpmat.cluster$silinfo$widths)
+
+group <- df$cluster
+vpmat <- vpmat[, match(cluster, colnames(vpmat))]
+grouped_clusters <- split(colnames(vpmat), group)
+results_list <- list()
+for (group_name in names(grouped_clusters)) {
+  subcluster_names <- grouped_clusters[[group_name]]
+  subcluster_matrix <- vpmat[, subcluster_names, drop = FALSE]
+  weights <- rep(1, ncol(subcluster_matrix))
+  integrated_results <- apply(subcluster_matrix, 1, stouffersMethod, weights = weights)
+  results_list[[group_name]] <- integrated_results
+}
+integrated_bulk_matrix <- do.call(cbind, results_list)
+
+common_genes <- intersect(rownames(integrated_sc_matrix), rownames(integrated_bulk_matrix))
+integrated_sc_matrix <- integrated_sc_matrix[common_genes, ]
+integrated_bulk_matrix <- integrated_bulk_matrix[common_genes, ]
+colnames(integrated_bulk_matrix) <- paste0("MYOD1_bulk_", colnames(integrated_bulk_matrix))
+combined_matrix <- cbind(integrated_sc_matrix, integrated_bulk_matrix)
+combined_matrix <- combined_matrix[!grepl("RPL|RPS", rownames(combined_matrix)), ]
+
+vpsim <- viperSimilarity(combined_matrix, nn = NULL, method = c("two.sided")) # can try all or setting nn=50 or 100 #distance matrix
+vpmat.cluster <- pamk(data=vpsim, krange=2:5)$pamobject
+vpmat.cluster$silinfo 
+
+paletteLength <- 60
+myColor <- colorRampPalette((rev(brewer.pal(n = 8, name = "RdBu"))))(paletteLength)
+myBreaks <- c(seq(min(vpsim), 0, length.out = ceiling(paletteLength/2) + 1), 
+              seq(max(vpsim)/paletteLength, max(vpsim), length.out = floor(paletteLength/2)))
+
+pheatmap(vpsim, cluster_rows = T, cluster_cols = T, 
+         show_rownames = TRUE, show_colnames = TRUE, 
+         fontsize_row = 6, fontsize_col = 6,
+         color = myColor,
+         breaks = myBreaks,
+         main = "Viper Similarity Matrix") 
+
+##############################
+###Cell State Signature Enrichment###
+combined_matrix <- read.csv("MYOD1.integrated.filt.vp.network_sample.indiv.sample.individualclusters.combined_matrix.mean.csv", row.names = 1)
+df <- read.csv("MYOD1.integrated.filt.vp.subclusters.group.csv") %>% arrange(cluster)
+cluster <- df$subcluster
+group <- df$cluster
+combined_matrix <- combined_matrix[, match(cluster, colnames(combined_matrix))]
+combined_matrix <- combined_matrix[!grepl("RPL|RPS", rownames(combined_matrix)), ]
+
+stouffersMethod <- function(x, weights) {
+  return(sum(x * weights) / sqrt(sum(weights * weights)))
+}
+combined_matrix <- combined_matrix[, match(cluster, colnames(combined_matrix))]
+grouped_clusters <- split(colnames(combined_matrix), group)
+results_list <- list()
+for (group_name in names(grouped_clusters)) {
+  subcluster_names <- grouped_clusters[[group_name]]
+  subcluster_matrix <- combined_matrix[, subcluster_names, drop = FALSE]
+  weights <- rep(1, ncol(subcluster_matrix))
+  integrated_results <- apply(subcluster_matrix, 1, stouffersMethod, weights = weights)
+  results_list[[group_name]] <- integrated_results
+}
+integrated_sc_matrix <- do.call(cbind, results_list)
+
+#create regulon from top 50 and bottom 50 MRs from sc viper matrix integrated by cell state
+get_top_genes <- function(vector, n = 50) {
+  top_genes <- names(sort(vector, decreasing = TRUE)[seq_len(min(n, length(vector)))])
+  # bottom_genes <- names(sort(vector, decreasing = FALSE)[seq_len(min(n, length(vector)))])
+  return(top_genes)
+}
+gene_lists <- list()
+cell_states <- c("differentiated", "intermediate", "progenitor")
+for (state in cell_states) {
+  state_matrix <- integrated_sc_matrix[, grepl(state, colnames(integrated_sc_matrix))]
+  gene_lists[[state]] <- get_top_genes(state_matrix, n = 50)
+}
+
+list2regulon1Tail <- function(x, only_names = FALSE) {
+  res <- lapply(x,function(x){
+    tfmode <- rep(1, length(x))
+    if(only_names==F){names(tfmode) <- names(x)}
+    else{names(tfmode) <- x}
+    list(tfmode=tfmode, likelihood=rep(1, length(tfmode)))
+    })
+    class(res) <- "regulon"
+    res
+}
+
+regul <- list2regulon1Tail(gene_lists, only_names = T)
+
+integrated_matrix <- read.csv("MYOD1_bulk.integrated.viper.csv", row.names = 1)
+vpmat <- read.csv("/path/RMS/MYOD1_bulk/MYOD1_bulk_viper.csv", row.names = 1)
+common_genes <- intersect(rownames(integrated_sc_matrix), rownames(vpmat))
+integrated_matrix <- integrated_matrix[common_genes, ]
+vpmat <- vpmat[common_genes, ]
+
+path_enrich <- aREA(vpmat, regul, minsize = 2) # sign_tab is the matrix of signatures (matrix of mean viper signatures for each of the subclusters)
+pathways.nes <- path_enrich$nes
+heatmap_matrix <- pathways.nes
+
+df2 <- read.csv("MYOD1_bulk_viperSimilarity_cluster.csv")
+setwd("/path/RMS/MYOD1_bulk")
+df <- read.csv("MYOD1_bulk.csv") %>% 
+       left_join(df2, by = c("ID" = "X")) %>%
+       arrange(cluster)
+df$Type <- factor(df$Type, levels = c("Biopsy", "Resection", "Local relapse", "Metastasis", "Unknown"))
+cluster <- df$ID
+group <- df$cluster
+
+heatmap_matrix <- heatmap_matrix[, match(df$ID, colnames(heatmap_matrix))]
+
+annotation <- data.frame(Sample = df$Type, Treatment = df$Treatment, Group = df$cluster, Subcluster = df$ID)
+rownames(annotation) <- df$ID
+anno.colors <- list(Sample = c("Biopsy" = "#66c2a4", "Resection" = "#006d2c", "Local relapse" = "#e41a1c", "Metastasis" = "#984ea3",
+                               "Unknown" = "#d9d9d9"),
+                    Treatment = c("Non-treated" = "#0571b0", "Post-treatment" = "#8c510a", "Unknown" = "#d9d9d9"),
+                    Group = c("1" = "#1a9850", "2" = "#08519c", "3" = "#e31a1c"))
+
+group_order <- annotation$Group[match(colnames(heatmap_matrix), annotation$Subcluster)]
+gaps_col <- which(diff(as.numeric(factor(group_order))) != 0)
+
+paletteLength <- 60 
+myColor <- colorRampPalette((rev(brewer.pal(n = 8, name = "RdBu"))))(paletteLength)
+myBreaks <- c(seq(min(heatmap_matrix), 0, length.out = ceiling(paletteLength/2) + 1), 
+              seq(max(heatmap_matrix)/paletteLength, max(heatmap_matrix), length.out = floor(paletteLength/2))) 
+
+pheatmap(heatmap_matrix, 
+          cluster_rows = F, 
+          treeheight_row = 0, 
+          cluster_cols = FALSE, 
+          show_rownames = TRUE, 
+          show_colnames = TRUE, 
+          fontsize_row = 8, 
+          fontsize_col = 6,
+          color = myColor,
+          breaks = myBreaks,
+          annotation_col = annotation,
+          annotation_colors = anno.colors,
+          gaps_col = gaps_col,
+          main = "")
 ############################################################################
 ####cell cycle scoring######
 setwd("/path/scRNA/RMS/seurat/ARACNe")
