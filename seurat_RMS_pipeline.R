@@ -732,7 +732,7 @@ list2regulon1Tail <- function(x, only_names = FALSE) {
     res
 }
 
-####GSEA lineage markers Marker list enrichment####
+####Lineage markers Marker list enrichment####
 #sctype
 db_path <- "/path/scRNA/functions/ScTypeDB_db.xlsx"
 db_data <- read_excel(db_path)
@@ -745,7 +745,7 @@ gene_lists <- cell_type_data %>%
 
 regul <- list2regulon1Tail(gene_lists,only_names = T)
 
-                     combined_matrix <- read.csv("MYOD1.integrated.filt.vp.network_sample.indiv.sample.individualclusters.combined_matrix.mean.csv", row.names = 1)
+combined_matrix <- read.csv("MYOD1.integrated.filt.vp.network_sample.indiv.sample.individualclusters.combined_matrix.mean.csv", row.names = 1)
 stouffersMethod <- function(x, weights) {
   return(sum(x * weights) / sqrt(sum(weights * weights)))
 }
@@ -790,7 +790,7 @@ paletteLength <- 60
 myColor <- colorRampPalette((rev(brewer.pal(n = 8, name = "RdBu"))))(paletteLength)
 myBreaks <- c(seq(min(heatmap_matrix), 0, length.out = ceiling(paletteLength/2) + 1), 
 
-  pheatmap(heatmap_matrix, 
+pheatmap(heatmap_matrix, 
           cluster_rows = TRUE, 
           treeheight_row = 0, 
           cluster_cols = FALSE, 
@@ -804,7 +804,6 @@ myBreaks <- c(seq(min(heatmap_matrix), 0, length.out = ceiling(paletteLength/2) 
           annotation_colors = anno.colors,
           gaps_col = gaps_col,
           main = "")
-dev.off()
 ##########################################
 ###CytoTRACE###
 ###MYOD1.integrated.vp#######
