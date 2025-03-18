@@ -78,7 +78,49 @@ row.names(combined_vp_RMS) <- hgnc
 combined_vp_RMS <- combined_vp_RMS[!is.na(rownames(combined_vp_RMS)), ]
 setwd("/path/scRNA/RMS/seurat/ARACNe")
 saveRDS(combined_vp_RMS, file = "MYOD1_muscle_diffexp.viper.sample_network.rds")
+                     
+##########################################
+###MR matrix###
+vpmat <- readRDS("MYOD1_muscle_diffexp.viper.sample_network.rds")
 
+common_cells <- intersect(colnames(vpmat), colnames(MYOD1.integrated.vp))
+vpmat <- vpmat[, common_cells]
+sample_clusters <- unique(MYOD1.integrated.vp$sample_cluster)
+results_list <- list()
+for (cluster in sample_clusters) {
+  cluster_cells <- colnames(MYOD1.integrated.vp)[MYOD1.integrated.vp$sample_cluster == cluster]
+  cluster_cells <- intersect(cluster_cells, colnames(vpmat))
+  if (length(cluster_cells) > 0) {
+    cluster_matrix <- vpmat[, cluster_cells, drop = FALSE]
+    cluster_means <- rowMeans(cluster_matrix, na.rm = TRUE)
+    results_list[[cluster]] <- cluster_means
+  }
+}
+combined_results <- do.call(cbind, results_list)
+combined_matrix <- as.matrix(combined_results) 
+write.csv(combined_matrix, file = "MYOD1_muscle_diffexp.viper.combined_matrix.mean.csv", row.names = TRUE)
+
+combined_matrix <- read.csv("MYOD1_muscle_diffexp.viper.combined_matrix.mean.csv", row.names = 1)
+stouffersMethod <- function(x, weights) {
+  return(sum(x * weights) / sqrt(sum(weights * weights)))
+}
+df <- read.csv("MYOD1.integrated.filt.vp.subclusters.group.csv") %>% arrange(cluster)
+cluster <- df$subcluster
+group <- df$cluster
+colnames(combined_matrix) <- gsub("_cluster_", ".cluster", colnames(combined_matrix))
+combined_matrix <- combined_matrix[, match(cluster, colnames(combined_matrix))]
+grouped_clusters <- split(colnames(combined_matrix), group)
+results_list <- list()
+for (group_name in names(grouped_clusters)) {
+  subcluster_names <- grouped_clusters[[group_name]]
+  subcluster_matrix <- combined_matrix[, subcluster_names, drop = FALSE]
+  weights <- rep(1, ncol(subcluster_matrix))
+  integrated_results <- apply(subcluster_matrix, 1, stouffersMethod, weights = weights)
+  results_list[[group_name]] <- integrated_results
+}
+integrated_matrix <- do.call(cbind, results_list)
+write.csv(integrated_matrix, file = "MYOD1_muscle_diffexp.viper.cell_state.mean.integrated.csv", row.names = TRUE)
+                     
 ##topMRs###
 get_top_genes <- function(matrix, n = 20) {
   selected_genes <- unique(unlist(lapply(seq_len(ncol(matrix)), function(i) {
