@@ -13,9 +13,7 @@ library(ggpubr)
 library(pheatmap)
 library(RColorBrewer)
 library(glmGamPoi)
-library(PISCES)
 library(celldex)
-library(cellxgene.census)
 library(SingleCellExperiment)
 library(scater)
 library(SingleR)
@@ -29,10 +27,8 @@ library(CytoTRACE)
 library(DESeq2)
 library(readxl)
 library(presto)
-library(CytoTRACE)
 library(clusterProfiler)
 library(msigdbr)
-# library(fpc)
 library(patchwork)
 library(CellChat)
 source("functions/process-utils.R")
@@ -55,6 +51,50 @@ for (i in seq_along(sample)) {
 }
 setwd("/path/scRNA/RMS/seurat")
 saveRDS(obj.list, file = "MYOD1.obj.list.rds")
+
+####################
+#pre-integration (pre-batch correction)
+sample <- c("MYOD1_RMS_3_2", "MYOD1_RMS_31_2", "MYOD1_RMS_41B", "MYOD1_RMS_211_2", "MYOD1_RMS_469", "MYOD1_RMS_475")
+names(obj.list) <- sample
+for (sample_name in names(obj.list)) {
+  obj.list[[sample_name]] <- AddMetaData(
+  object = obj.list[[sample_name]],
+  metadata = sample_name,
+  col.name = "sample"
+  )
+}
+MYOD1.obj.preintegrated <- merge(obj.list[["MYOD1_RMS_3_2"]], 
+                                y = c(obj.list[["MYOD1_RMS_31_2"]],
+                                  obj.list[["MYOD1_RMS_41B"]],obj.list[["MYOD1_RMS_211_2"]], 
+                                  obj.list[["MYOD1_RMS_469"]],obj.list[["MYOD1_RMS_475"]]), 
+                                  add.cell.ids = c("MYOD1_RMS_3_2", "MYOD1_RMS_31_2", "MYOD1_RMS_41B", "MYOD1_RMS_211_2", "MYOD1_RMS_469", "MYOD1_RMS_475"), project = "MYOD1",
+    merge.data = TRUE)
+MYOD1.obj.preintegrated <- NormalizeData(MYOD1.obj.preintegrated)
+features <- SelectIntegrationFeatures(object.list = obj.list, nfeatures = 3000)
+VariableFeatures(MYOD1.obj.preintegrated) <- features
+MYOD1.obj.preintegrated <- ScaleData(MYOD1.obj.preintegrated)
+MYOD1.obj.preintegrated <- RunPCA(MYOD1.obj.preintegrated)
+MYOD1.obj.preintegrated <- FindNeighbors(MYOD1.obj.preintegrated, dims = 1:10)
+MYOD1.obj.preintegrated <- RunUMAP(MYOD1.obj.preintegrated, dims = 1:10, reduction = "pca")
+singleR.bp <- readRDS("MYOD1.obj.integrated.blueprint_ref_singleR.rds")
+MYOD1.obj.preintegrated$SingleR.bp.labels <- singleR.bp$labels
+non_tumoral_cells <- c("Endothelial cells", "Macrophages", "Monocytes","Melanocytes", "B-cells", "CD4+ T-cells", "CD8+ T-cells", "Erythrocytes",
+                      "NK cells", "Eosinophils", "DC", "HSC", "Epithelial cells", "Keratinocytes", "Neutrophils", "Mesangial cells",
+                      "Astrocytes")
+tumoral_cells <- setdiff(unique(MYOD1.obj.integrated$SingleR.bp.labels), non_tumoral_cells)
+MYOD1.obj.preintegrated$tumoral_status <- ifelse(MYOD1.obj.preintegrated$SingleR.bp.labels %in% non_tumoral_cells, "Non-tumoral", "Tumoral")
+cell_colors <- c("Non-tumoral" = "darkgreen", "Tumoral" = "#f4a64d")
+
+pdf("MYOD1.obj.preintegrated.umap.by_sample_cluster.v2.pdf", height = 10, width = 20)
+    plot(DimPlot(MYOD1.obj.preintegrated, reduction = "umap",
+        group.by = c("tumoral_status"),
+        label=TRUE,repel=T,label.size=5))  +
+        scale_color_manual(values = cell_colors)
+    plot(DimPlot(MYOD1.obj.preintegrated, reduction = "umap",
+        group.by = c("sample"),
+        label=TRUE,repel=T,label.size=5))  +
+        scale_color_manual(values = cell_colors)
+dev.off()
 
 ####seurat v4 intergration#####
 obj.list <- readRDS(file = "MYOD1.obj.list.rds")
@@ -86,14 +126,127 @@ ref.bp.data <- BlueprintEncodeData(ensembl=FALSE)
 singleR.bp.res <- SingleR(test = df, ref = ref.bp.data, assay.type.test = 1, labels = ref.bp.data$label.main)
 saveRDS(singleR.bp.res, file = "MYOD1.obj.integrated.blueprint_ref_singleR.rds")
 table(singleR.bp.res$labels)
-write.table(table(singleR.bp.res$labels), paste0('singleR_bp.labels.txt'), row.names = F)
 MYOD1.obj.integrated[["SingleR.labels"]] <- singleR.res$labels
-setwd("/path/scRNA/RMS/seurat", height = 10, width = 20)
-pdf(paste0('singleR_blueprint_plots.pdf'))
-plotScoreHeatmap(singleR.bp.res)
+
+non_tumoral_cells <- c("Endothelial cells", "Macrophages", "Monocytes","Melanocytes", "B-cells", "CD4+ T-cells", "CD8+ T-cells", "Erythrocytes",
+                      "NK cells", "Eosinophils", "DC", "HSC", "Epithelial cells", "Keratinocytes", "Neutrophils", "Mesangial cells",
+                      "Astrocytes")
+tumoral_cells <- setdiff(unique(MYOD1.obj.integrated$SingleR.bp.labels), non_tumoral_cells)
+
+MYOD1.obj.integrated$tumoral_status <- ifelse(MYOD1.obj.integrated$SingleR.bp.labels %in% non_tumoral_cells, "Non-tumoral", "Tumoral")
+cell_colors <- c("Non-tumoral" = "darkgreen", "Tumoral" = "#f4a64d")
+
+pdf(paste0('MYOD1.obj.integrated.umap.singleR.bp.v4.pdf'), height = 10, width = 20)
+    plot(DimPlot(MYOD1.obj.integrated, reduction = "umap",
+        group.by = c("tumoral_status"),
+        label=TRUE,repel=T,label.size=5))  +
+        scale_color_manual(values = cell_colors)
+    plot(DimPlot(MYOD1.obj.integrated, reduction = "umap",
+        group.by = c("sample"),
+        label=TRUE,repel=T,label.size=5))  +
+        scale_color_manual(values = cell_colors)
+dev.off()
+
+#label TME immune cell (lymphoid, myeloid) and stromal compartments
+lymphoid <- c("NK cells", "CD4+ T-cells", "CD8+ T-cells", "B-cells")
+myeloid <- c("Macrophages", "Monocytes", "Neutrophils", "Eosinophils", "Mesangial cells", "DC", "Erythrocytes", "HSC")
+stromal <- c("Astrocytes", "Endothelial cells", "Epithelial cells", "Melanocytes", "Keratinocytes")
+malignant <- setdiff(unique(MYOD1.obj.integrated$SingleR.bp.labels), c(lymphoid, myeloid, stromal))
+
+MYOD1.obj.integrated$cell_classification <- sapply(MYOD1.obj.integrated$SingleR.bp.labels, function(label) {
+  if (label %in% lymphoid) {
+    return("Lymphoid")
+  } else if (label %in% myeloid) {
+    return("Myeloid")
+  } else if (label %in% stromal) {
+    return("Stromal")
+  } else {
+    return("Malignant")
+  }
+})
+MYOD1.obj.integrated$cell_classification <- factor(
+  MYOD1.obj.integrated$cell_classification,
+  levels = c("Lymphoid", "Myeloid", "Malignant", "Stromal") # "Stromal" is last
+)
+classification_colors <- c("Lymphoid" = "#1c5de8", "Myeloid" = "#d10909", "Stromal" = "#068506", "Malignant" = "#ef850b")
+
+pdf(paste0('MYOD1.obj.integrated.umap.cell_classification.pdf'), height = 10, width = 20)
+DimPlot(MYOD1.obj.integrated, reduction = "umap", group.by = "cell_classification", label = TRUE, repel = TRUE, label.size = 5) +
+  scale_color_manual(values = classification_colors) +
+  labs(title = "UMAP Plot of Cell Classifications")
+dev.off()
+
+
+#label TME immune cell (lymphoid, myeloid) and stromal compartments
+lymphoid <- c("NK cells", "CD4+ T-cells", "CD8+ T-cells", "B-cells")
+myeloid <- c("Macrophages", "Monocytes", "Neutrophils", "Eosinophils", "Mesangial cells", "DC", "Erythrocytes", "HSC")
+stromal <- c("Astrocytes", "Endothelial cells", "Epithelial cells", "Melanocytes", "Keratinocytes")
+labels <- singleR.bp$labels
+cell_classification <- sapply(labels, function(label) {
+  if (label %in% lymphoid) {
+    return("Lymphoid")
+  } else if (label %in% myeloid) {
+    return("Myeloid")
+  } else if (label %in% stromal) {
+    return("Stromal")
+  } else {
+    return("Malignant")
+  }
+})
+cell_counts <- table(cell_classification)
+cell_counts_df <- as.data.frame(cell_counts)
+colnames(cell_counts_df) <- c("Cell_Type", "Count")
+cell_counts_df$Percentage <- round((cell_counts_df$Count / sum(cell_counts_df$Count)) * 100, 1)
+cell_counts_df$Label <- paste0(cell_counts_df$Cell_Type, "\n", cell_counts_df$Count, " (", cell_counts_df$Percentage, "%)")
+
+pdf(paste0('MYOD1.obj.integrated.singleR.bp.TME.pdf'), height = 5, width = 5)
+    ggplot(cell_counts_df, aes(x = "", y = Count, fill = Cell_Type)) +
+      geom_bar(stat = "identity", width = 1) +
+      coord_polar("y", start = 0) +
+      scale_fill_manual(values = c("Lymphoid" = "#1c5de8", "Myeloid" = "#d10909", "Stromal" = "#068506", "Malignant" = "#ef850b")) +
+      theme_void() +
+      labs(title = "Distribution of Tumoral and Non-Tumoral Cells") +
+      ggrepel::geom_text_repel(aes(label = Label, y = Count / 2 + c(0, cumsum(Count)[-length(Count)])), 
+                      nudge_x = 1, size = 4, show.legend = FALSE)
 dev.off()
 ##############################
-
+#infercnv
+Idents(MYOD1.obj.integrated) <- singleR.bp$labels
+counts_matrix = GetAssayData(MYOD1.obj.integrated, assay= "SCT", layer = "counts")
+#generate sample annotation file for inferCNV
+annot <- data.frame(cell=names(Idents(MYOD1.obj.integrated)),celltype=Idents(MYOD1.obj.integrated))
+names(annot) <- NULL
+write.table(annot, sep = "\t", col.names = F, row.names = F, file = "cellAnnotations.txt")
+#generate gene ordering file for inferCNV
+mart <- useDataset("hsapiens_gene_ensembl", useMart("ensembl"))
+genes <- row.names(MYOD1.obj.integrated)
+#attributes = listAttributes(mart)
+gene_pos <- getBM(filters= c("hgnc_symbol"), attributes= c("ensembl_gene_id","hgnc_symbol",
+                                                           "chromosome_name","start_position","end_position"),
+                  values=genes, mart= mart)
+gene_ordering <- gene_pos %>% dplyr::select(hgnc_symbol,chromosome_name,start_position,end_position) %>% 
+  filter(chromosome_name %in% c(as.character(seq(1:23)),"X","Y")) %>% 
+  mutate(chromosome_name=paste0("chr",chromosome_name)) %>% 
+  distinct(hgnc_symbol,.keep_all = T) %>% 
+  column_to_rownames("hgnc_symbol")
+names(gene_ordering) <- NULL
+# create the infercnv object
+ref_group_names <- c("Endothelial cells","Macrophages","Melanocytes","B-cells","CD4+ T-cells","CD8+ T-cells","NK cells","Eosinophils","DC","HSC",
+                      "Epithelial cells","Keratinocytes","Neutrophils","Mesangial cells")
+infercnv_obj = CreateInfercnvObject(raw_counts_matrix=counts_matrix,
+                                    annotations_file="cellAnnotations.txt",
+                                    delim="\t",
+                                    gene_order_file=gene_ordering,
+                                    ref_group_names=ref_group_names)
+# perform infercnv operations to reveal cnv signal
+infercnv_obj = infercnv::run(infercnv_obj,
+                             cutoff=0.1,  # use 1 for smart-seq, 0.1 for 10x-genomics
+                             out_dir="infercnv",  # dir is auto-created for storing outputs
+                             cluster_by_groups=T,   # cluster
+                             denoise=T,
+                             HMM=T,
+                             num_threads=8
+)
 ######ARACNE networks from samples######
 setwd("/path/scRNA/RMS")
 project <- "RMS"
@@ -107,20 +260,11 @@ sample <- "MYOD1_RMS_475"
 sample <- "MYOD1_PDX_PRMS"
 ref.data <- celldex::BlueprintEncodeData(ensembl=FALSE)
 mart <- useDataset("hsapiens_gene_ensembl", useMart("ensembl"))
-#ref_group_names <- c("Endothelial cells","Macrophages","Monocytes","B-cells","CD4+ T-cells","CD8+ T-cells","NK cells","Eosinophils","DC","HSC")
+#ref_group_names <- c("Endothelial cells","Macrophages","Monocytes","B-cells","CD4+ T-cells","CD8+ T-cells","NK cells","Eosinophils","DC","HSC","Erythrocytes","Mesangial cells","Melanocytes","Neutrophils","Keratinocytes")
 #RMS
-ref_group_names <- c("Endothelial cells","Macrophages","Monocytes","B-cells","CD4+ T-cells","CD8+ T-cells","NK cells","Eosinophils","Erythrocytes","HSC","Mesangial cells","DC","Melanocytes")
-ref_group_names <- c("Endothelial cells","Macrophages","Monocytes","CD4+ T-cells","CD8+ T-cells","Epithelial cells","Neutrophils","Mesangial cells","Melanocytes")
-ref_group_names <- c("Endothelial cells","Macrophages","Monocytes","B-cells","CD4+ T-cells","CD8+ T-cells","DC","Erythrocytes","Neutrophils")
-ref_group_names <- c("Endothelial cells","Macrophages","Monocytes","B-cells","CD4+ T-cells","CD8+ T-cells","DC","Eosinophils","Epithelial cells","HSC","Erythrocytes","Neutrophils","Keratinocytes")
-ref_group_names <- c("Endothelial cells","Macrophages","Monocytes","B-cells","CD4+ T-cells","CD8+ T-cells","DC","Erythrocytes","HSC","Melanocytes")
-ref_group_names <- c("Endothelial cells","Macrophages","Monocytes","B-cells","CD4+ T-cells","CD8+ T-cells","DC","Eosinophils","Erythrocytes","HSC","Mesangial cells","Melanocytes")
-ref_group_names <- c("Endothelial cells","Macrophages","Monocytes","B-cells","CD4+ T-cells","CD8+ T-cells","DC","Eosinophils","Erythrocytes","HSC","Melanocytes","Mesangial cells")
-setwd("/path/scRNA/RMS")
 ## load data from 10x, create seurat object
 exp.mat <- Read10X(sample)
 pisces.obj <- CreateSeuratObject(counts = exp.mat, min.cells = 3, min.features = 200)
-#counts_matrix = GetAssayData(pisces.obj, layer = "counts")
 genes_to_remove <- grep("\\.[1-9]|^LINC|-", rownames(pisces.obj), value = TRUE) #remove noncoding genes
 genes_to_keep <- rownames(pisces.obj)[!(rownames(pisces.obj) %in% genes_to_remove)]
 pisces.obj <- subset(pisces.obj, features = genes_to_keep)
@@ -129,16 +273,12 @@ df <- as.SingleCellExperiment(pisces.obj, assay = "RNA")
 df <- logNormCounts(df)
 singleR.res <- SingleR(test = df, ref = ref.data, assay.type.test = 1, labels = ref.data$label.main)
 saveRDS(singleR.res, file = paste0(sample, '/singleR.res.rds'))
-table(singleR.res$labels)
-write.table(table(singleR.res$labels), paste0(sample, '/singleR_labels.txt'), row.names = F)
+
 pisces.obj[["SingleR.labels"]] <- singleR.res$labels
 Idents(pisces.obj) <- singleR.res$labels
 pisces.obj.subset <- subset(pisces.obj, 
                             idents = ref_group_names,
                             invert = TRUE)
-saveRDS(pisces.obj.subset, file = paste0(sample, '_subset.rds'))
-#saveRDS(pisces.obj.subset, file = paste0(sample, '_subset_fullfeatures.rds')) #without filtering noncoding genes
-pisces.obj.subset <- readRDS(file = paste0(sample, '_subset.rds'))
 counts_matrix <- GetAssayData(pisces.obj.subset, layer = "counts")
  #convert to ARACNe input
 genes <- row.names(counts_matrix)
@@ -182,8 +322,7 @@ for (i in seq_along(sample)) {
   obj <- SCTransform(obj, verbose = T, conserve.memory = T)
   MYOD1.subset.obj.list <- append(MYOD1.subset.obj.list, obj)
 }
-setwd("/path/scRNA/RMS/seurat/ARACNe")
-saveRDS(MYOD1.subset.obj.list, file = "MYOD1.subset.obj.list.rds")
+
 MYOD1.subset.obj.list <- readRDS(file = "MYOD1.subset.obj.list.rds")
 features <- SelectIntegrationFeatures(object.list = MYOD1.subset.obj.list)
 MYOD1.subset.obj.list <- PrepSCTIntegration(object.list = MYOD1.subset.obj.list, anchor.features = features, verbose = T)
@@ -227,87 +366,10 @@ dev.off()
 MYOD1.obj.integrated$seurat_clusters=MYOD1.obj.integrated@meta.data[,which(colnames(MYOD1.obj.integrated@meta.data)==paste("integrated_snn_res.",best,sep=""))]
 MYOD1.obj.integrated <- FindClusters(MYOD1.obj.integrated, resolution = 0.05)
 Idents(MYOD1.obj.integrated) <- "seurat_clusters"
-saveRDS(MYOD1.obj.integrated, file = "MYOD1.obj.filt.integrated.v2.rds") #integrated from individual subset objects
 
-#create UMAP plot
-MYOD1.obj.integrated <- readRDS(file = "MYOD1.obj.filt.integrated.v2.rds")
-# Stash cell identity classes in metadata
-MYOD1.obj.integrated[["seurat_clusters"]] <- Idents(object = MYOD1.obj.integrated)
-pdf(paste0('MYOD1.obj.filt.integrated.umap.v2.pdf'), height = 10, width = 20)
-plot(DimPlot(MYOD1.obj.integrated, reduction = "umap",
-     group.by = c("sample", "seurat_clusters"),
-     label=TRUE,repel=T,label.size=5))
-dev.off()
-#perform differential expression
-MYOD1.obj.integrated <- PrepSCTFindMarkers(MYOD1.obj.integrated, verbose = T)
-markers <- FindAllMarkers(MYOD1.obj.integrated, only.pos = TRUE)
-write.csv(markers, file = "MYOD1.obj.filt.integrated.allmarker.v2.csv")
-markers <- read.csv("MYOD1.obj.filt.integrated.allmarker.v2.csv")
-top10 <- markers %>% group_by(cluster) %>% top_n(n = 20, wt = avg_log2FC)
-pdf(paste0('MYOD1.obj.filt.integrated.marker.v2.pdf'))
-DoHeatmap(MYOD1.obj.integrated, features = top10$gene, group.by = "ident", slot = "data", label = TRUE) + NoLegend() + scale_fill_gradientn(colors = c("blue", "white", "red"))
-DoHeatmap(MYOD1.obj.integrated, features = top10$gene, group.by = "ident", slot = "data", label = TRUE) + NoLegend() 
-dev.off()
-setwd("/path/scRNA")
-source("functions/misc3.R")
-setwd("/path/scRNA/RMS/seurat/ARACNe")
-pdf(paste0('MYOD1.obj.filt.integrated.allmarker.geneHeatmap.v2.pdf'))
- geneHeatmap_plot(MYOD1.obj.integrated,MYOD1.obj.integrated$seurat_clusters,top10$gene,genes_by_cluster = T,n_top_genes_per_cluster = 20)
-dev.off()
-saveRDS(MYOD1.obj.integrated, file = "MYOD1.obj.filt.integrated.v2.rds")
-###############################################
-#####sample vs cluster####
-metadata <- MYOD1.obj.integrated@meta.data
-contingency_table <- table(metadata$seurat_clusters, metadata$sample)
-contingency_df <- as.data.frame(contingency_table)
-colnames(contingency_df) <- c("Cluster", "Sample", "Frequency")
-pdf(paste0('MYOD1.obj.filt.integrated.cluster.sample.barplot.pdf'), height = 5, width = 10)
-  ggplot(contingency_df, aes(x = factor(Sample, 
-                  levels = c("MYOD1_RMS_475","MYOD1_RMS_41B","MYOD1_RMS_211_2","MYOD1_RMS_3_2","MYOD1_RMS_31_2","MYOD1_RMS_469")), 
-          y = Frequency, fill = Cluster)) +
-    geom_bar(stat = "identity", position = "fill") +
-    labs(title = "Distribution of Samples in Each Seurat Cluster",
-        x = "Seurat Cluster",
-        y = "Frequency") + 
-    scale_fill_brewer(palette = "Set1") +
-    coord_flip() +
-    theme_minimal()
-  ggplot(contingency_df, aes(x = Cluster, y = Frequency, fill = Sample)) +
-    geom_bar(stat = "identity", position = "fill") +
-    labs(title = "Distribution of Samples in Each Seurat Cluster",
-        x = "Seurat Cluster",
-        y = "Frequency") + 
-    scale_fill_brewer(palette = "Set1") +
-    coord_flip() +
-    theme_minimal()
-dev.off()
-###############################################
-###########match gene and protein response categories#########
-MYOD1.obj.integrated <- readRDS(file = "MYOD1.obj.filt.integrated.v2.rds")
-MYOD1.obj.integrated[["SingleR.labels"]] <- singleR.res$labels
-#matching elements from MYOD1.obj.integrated$sample to MYOD1.integrated.vp
-matched_elements <- unname(MYOD1.obj.integrated$sample[colnames(MYOD1.integrated.vp)])
-MYOD1.integrated.vp$sample <- matched_elements
-matched_elements <- unname(MYOD1.obj.integrated$sample[colnames(MYOD1.integrated.vp)])
-new_matched_elements <- recode(matched_elements, "MYOD1_RMS_3_2" = "recurrence", #disease recurrent viable progressed on chemo
-                                                 "MYOD1_RMS_31_2" = "progressed", #disease progression little treatment effect
-                                                 "MYOD1_RMS_41B" = "stable", #stable disease (no change in size MRI) NED
-                                                 "MYOD1_RMS_211_2" = "recurrence", #modest response to salvage chemo. relapsed quickly
-                                                 "MYOD1_RMS_469" = "progressed", #progression despite 1-2 cycles of chemo
-                                                 "MYOD1_RMS_475" = "stable") #stable disease (no change in size MRI) NED
-new_matched_elements <- recode(matched_elements, "MYOD1_RMS_3_2" = "resistant", 
-                                                 "MYOD1_RMS_31_2" = "resistant", 
-                                                 "MYOD1_RMS_41B" = "responsive", 
-                                                 "MYOD1_RMS_211_2" = "resistant", 
-                                                 "MYOD1_RMS_469" = "resistant", 
-                                                 "MYOD1_RMS_475" = "responsive")
-MYOD1.obj.integrated$response <- new_matched_elements                           
-MYOD1.integrated.vp$response <- new_matched_elements
 ##############################################
 ###CytoTRACE###
 ###MYOD1.obj.integrated#######
-setwd("/path/scRNA/RMS/seurat/ARACNe")
-MYOD1.obj.integrated <- readRDS("MYOD1.obj.filt.integrated.v2.rds")
 df <- as.SingleCellExperiment(MYOD1.obj.integrated, assay = "SCT")
 counts_matrix <- as.matrix(df@assays@data@listData$counts)
 MYOD1.obj.integrated.cytotrace <- CytoTRACE(counts_matrix, ncores = 8)
@@ -317,11 +379,10 @@ MYOD1.obj.integrated.cytotrace <- CytoTRACE(counts_matrix, ncores = 8)
 #numeric vector of the Pearson correlation between each gene and CytoTRACE
 #numeric vector of the Pearson correlation between each gene and gene counts
 #the IDs of filtered cells, and a normalized gene expression table
-saveRDS(MYOD1.obj.integrated.cytotrace, file = "MYOD1.obj.filt.integrated.cytotrace.v2.rds")
-MYOD1.obj.integrated.cytotrace <- readRDS("MYOD1.obj.filt.integrated.cytotrace.v2.rds")
+
 MYOD1.obj.integrated <- AddMetaData(MYOD1.obj.integrated, metadata = MYOD1.obj.integrated.cytotrace$CytoTRACE, col.name = "CytoTRACE")
-saveRDS(MYOD1.obj.integrated, file = "MYOD1.obj.filt.integrated.v2.rds")
-pdf(paste0('MYOD1.obj.filt.integrated.cytotrace.umap.v2.pdf'), height = 10, width = 10)
+
+pdf(paste0('MYOD1.obj.filt.integrated.cytotrace.umap.pdf'), height = 10, width = 10)
   FeaturePlot(MYOD1.obj.integrated, features = c("CytoTRACE")) +
     scale_color_gradientn(colors = rev(brewer.pal(11, "RdYlBu")))
 dev.off()
@@ -329,8 +390,6 @@ dev.off()
 ###############################################
 
 ####interactome#######
-setwd("/path/scRNA/RMS/seurat/ARACNe")
-MYOD1.obj.integrated <- readRDS("MYOD1.obj.filt.integrated.v2.rds")
 clusters <- unique(Idents(MYOD1.obj.integrated))
 sample <- unique(MYOD1.obj.integrated$sample)
 filenames <- list.files("/path/scRNA/RMS/seurat/ARACNe/network_samples", pattern="*.rds", full.names=TRUE)
@@ -434,15 +493,10 @@ for (s in seq_along(sample)) {
   saveRDS(vp_RMS, paste0(sample[s], '.viper.sample_network.rds'))
 }
 combined_vp_RMS <- do.call(cbind, all_vp_RMS)
-setwd("/path/scRNA/RMS/seurat/ARACNe")
-saveRDS(combined_vp_RMS, "MYOD1.filt.obj.filtered.viper.sample_network.indiv.sample.rds")
-#############################
 
-##########################################
 #####VIPER clustering of each sample and then integrate signature######
 setwd("/path/scRNA/RMS/seurat/ARACNe")
-vp_RMS <- readRDS("MYOD1.filt.obj.filtered.viper.sample_network.indiv.sample.v2.rds")
-MYOD1.obj.integrated <- readRDS(file = "MYOD1.obj.filt.integrated.v2.rds")
+vp_RMS <- rcombined_vp_RMS
 common_cell <- intersect(colnames(vp_RMS), colnames(MYOD1.obj.integrated))
 vp_RMS <- vp_RMS[, common_cell]
 mart <- readRDS("/path/scRNA/functions/mart.obj.rds")
@@ -487,14 +541,8 @@ for (i in seq_along(unique_samples)) {
   Idents(MYOD1.integrated.vp.sample) <- "seurat_clusters"
   MYOD1.integrated.vp.sample.list <- append(MYOD1.integrated.vp.sample.list, MYOD1.integrated.vp.sample)   
 }
-saveRDS(MYOD1.integrated.vp.sample.list, file = "MYOD1.integrated.filt.vp.network_sample.indiv.sample.list.rds")
-MYOD1.integrated.vp.sample.list <- readRDS("MYOD1.integrated.filt.vp.network_sample.indiv.sample.list.rds")
-#get all object metadata: MYOD1.integrated.vp.sample.list[[1]][[]]
-#get list of metadata columns: colnames(MYOD1.integrated.vp.sample.list[[1]][[]])
 ##########################################
 ####cluster based on viperSimilarity matrix####
-MYOD1.integrated.vp <- readRDS("MYOD1.integrated.filt.vp.network.sample_network.indiv.sample.v2.rds")
-MYOD1.integrated.vp.sample.list <- readRDS("MYOD1.integrated.filt.vp.network_sample.indiv.sample.list.rds")
 # Define the sample list
 sample_list <- unique(MYOD1.integrated.vp$sample)
 names(MYOD1.integrated.vp.sample.list) <- sample_list
@@ -530,10 +578,6 @@ for (sample_name in seq_along(unique_samples)) {
     # Subset the count matrix for cells in the current cluster
     cluster_cells <- which(seurat_obj$seurat_clusters == cluster_id)
     count_matrix_cluster <- seurat_obj@assays$RNA@data[, cluster_cells]
-    # count_matrix_cluster <- seurat_obj@assays$RNA@scale.data[, cluster_cells]
-    # Apply the Stouffer's method function to each gene (row) in the subsetted count matrix
-    # weights <- rep(1, ncol(count_matrix_cluster))  # Example: equal weights for all cells
-    # cluster_results <- apply(count_matrix_cluster, 1, stouffersMethod, weights = weights)
     cluster_results <- rowMeans(count_matrix_cluster)
     # Store the results for the current cluster with appropriate column name
     sample_results[[paste0("cluster", cluster_id)]] <- cluster_results
@@ -544,13 +588,132 @@ combined_results <- do.call(cbind, unlist(results_list, recursive = FALSE))
 combined_matrix <- as.matrix(combined_results) 
 combined_matrix <- combined_matrix[, colSums(is.na(combined_matrix)) == 0]
 write.csv(combined_matrix, file = "MYOD1.integrated.filt.vp.network_sample.indiv.sample.individualclusters.combined_matrix.mean.csv")
+                  
+#generate viper similarity matrix
+###identify common reference group from each sample from each state using GES_scaled####
+CPM_normalization <- function(dset){
+  dset.log2cpm <- apply(dset,2,function(x){
+    y <- 1E6*x/sum(x) + 1
+    z <- log(y,2)
+    return(z)
+  })
+  return(dset.log2cpm)
+}
 
-                     
+GES_scaled <- function(dset, ref){
+  ref.mean <- apply(ref, 1, mean)
+  ref.sd <- apply(ref, 1, sd)
+  dset.ges <- apply(dset, 2, function(x){(x - ref.mean) / ref.sd})
+  dset.ges <- dset.ges[is.finite(rowSums(dset.ges)),]
+  return(dset.ges)
+}
+
+mart <- readRDS("/path/functions/mart.obj.rds")
+
+table(MYOD1.integrated.vp$sample_cluster)
+
+#generate reference group of equal number of cells randomly sampled from each sample from each state
+sample <- c("MYOD1_RMS_3_2", "MYOD1_RMS_31_2", "MYOD1_RMS_41B", "MYOD1_RMS_211_2", "MYOD1_RMS_469", "MYOD1_RMS_475")
+setwd("/data/vanderbilt/dermawaj/scRNA/RMS")
+sample.obj <- lapply(sample, function(s) readRDS(file = paste0(s, '_subset.rds')))
+filenames <- list.files("/path/scRNA/RMS/seurat/ARACNe/network_samples", pattern="*.rds", full.names=TRUE)
+nets <- lapply(filenames, readRDS)
+names(nets) <- sample
+
+sample.obj <- lapply(sample, function(s) readRDS(file = paste0(s, '_subset.rds')))
+
+all_ref <- list()
+for (s in seq_along(sample)) {
+  MYOD1.dat <- as.matrix(sample.obj[[s]]@assays$RNA@layers$counts)
+  genes <- row.names(sample.obj[[s]])
+  gene_ensembl <- getBM(filters = c("hgnc_symbol"), attributes = c("ensembl_gene_id", "hgnc_symbol"),
+                        values = genes, mart = mart)
+  ensembl <- gene_ensembl$ensembl_gene_id[match(genes, gene_ensembl$hgnc_symbol)]
+  row.names(MYOD1.dat) <- ensembl
+  MYOD1.dat <- MYOD1.dat[!is.na(rownames(MYOD1.dat)), ]
+  colnames(MYOD1.dat) <- paste0(colnames(sample.obj[[s]]), "_", s)
+  MYOD1.cpm <- CPM_normalization(MYOD1.dat) 
+  rm(MYOD1.dat)
+  gc()  
+  common_cells <- intersect(colnames(MYOD1.cpm), colnames(MYOD1.integrated.vp))
+  MYOD1.cpm <- MYOD1.cpm[, common_cells]
+  MYOD1.integrated.vp.subset <- subset(MYOD1.integrated.vp, cells = common_cells)
+  sampled_cells <- list()
+  for (state in c("differentiated", "intermediate", "progenitor")) {
+    matching_cols <- colnames(MYOD1.cpm)[as.character(MYOD1.integrated.vp.subset$cell_state) == state]
+      if (length(matching_cols) < 1450) {
+      next
+    }
+    sampled_cols <- sample(matching_cols, size = 1450, replace = FALSE)
+    sampled_cells[[state]] <- MYOD1.cpm[, sampled_cols]
+    }
+  ref <- do.call(cbind, sampled_cells)
+  all_ref[[sample[s]]] <- ref
+}
+common_rows <- Reduce(intersect, lapply(all_ref, rownames))
+all_ref <- lapply(all_ref, function(df) df[common_rows, , drop = FALSE])
+ref.cpm <- do.call(cbind, all_ref)
+
+###generate viper activity for each subcluster relative to the average of the common reference group
+sample <- c("MYOD1_RMS_3_2", "MYOD1_RMS_31_2", "MYOD1_RMS_41B", "MYOD1_RMS_211_2", "MYOD1_RMS_469", "MYOD1_RMS_475")
+sample.obj <- lapply(sample, function(s) readRDS(file = paste0(s, '_subset.rds')))
+
+all_vp_RMS <- list()
+for (s in seq_along(sample)) {
+  MYOD1.dat <- as.matrix(sample.obj[[s]]@assays$RNA@layers$counts)
+  genes <- row.names(sample.obj[[s]])
+  gene_ensembl <- getBM(filters = c("hgnc_symbol"), attributes = c("ensembl_gene_id", "hgnc_symbol"),
+                        values = genes, mart = mart)
+  ensembl <- gene_ensembl$ensembl_gene_id[match(genes, gene_ensembl$hgnc_symbol)]
+  row.names(MYOD1.dat) <- ensembl
+  MYOD1.dat <- MYOD1.dat[!is.na(rownames(MYOD1.dat)), ]
+  colnames(MYOD1.dat) <- colnames(sample.obj[[s]])
+  MYOD1.cpm <- CPM_normalization(MYOD1.dat) #run CPM_normalization function on raw count matrix sample by sample
+  common_genes <- intersect(rownames(MYOD1.cpm), rownames(ref.cpm))
+  MYOD1.cpm <- MYOD1.cpm[match(common_genes, rownames(MYOD1.cpm)), ]
+  ref.cpm <- ref.cpm[match(common_genes, rownames(ref.cpm)), ]
+  dat <- GES_scaled(MYOD1.cpm, ref.cpm) #differential gene expression relative to muscle
+  rm(MYOD1.dat)
+  gc()
+  colnames(dat) <- paste0(colnames(dat), "_", s)
+  indices <- seq(1, ncol(dat), by = 400)
+  seurat_viper_list <- list()
+  for (i in 1:(length(indices) - 1)) {
+    vp <- viper(dat[, indices[i]:indices[i + 1]], nets, method = 'none') #use this scaled signature in viper using methods = none 
+    seurat_viper_list <- c(seurat_viper_list, list(vp))
+  }
+  vp <- viper(dat[, indices[length(indices)]:ncol(dat)], nets, method = 'none')
+  seurat_viper_list <- c(seurat_viper_list, list(vp))
+  vp_RMS <- seurat_viper_list[[1]]
+  for (i in 2:length(seurat_viper_list)) {
+    vp_RMS <- cbind(vp_RMS, seurat_viper_list[[i]])
+  }
+  all_vp_RMS[[sample[s]]] <- vp_RMS
+}
+combined_vp_RMS <- do.call(cbind, all_vp_RMS)
+genes <- row.names(combined_vp_RMS)
+gene_hgnc <- getBM(filters = c("ensembl_gene_id"), attributes = c("ensembl_gene_id", "hgnc_symbol"),
+                      values = genes, mart = mart)
+hgnc <- gene_hgnc$hgnc_symbol[match(genes, gene_hgnc$ensembl_gene_id)]
+row.names(combined_vp_RMS) <- hgnc
+combined_vp_RMS <- combined_vp_RMS[!is.na(rownames(combined_vp_RMS)), ]
+
+####viper similarity heatmap###
+common_cols <- intersect(colnames(combined_vp_RMS), colnames(MYOD1.integrated.vp))
+combined_vp_RMS <- combined_vp_RMS[, common_cols, drop = FALSE]
+sample_cluster <- MYOD1.integrated.vp$sample_cluster
+matched_clusters <- sample_cluster[colnames(combined_vp_RMS)]
+mean_matrix <- sapply(unique(matched_clusters), function(cluster) {
+  cluster_cols <- which(matched_clusters == cluster)
+  rowMeans(combined_vp_RMS[, cluster_cols, drop = FALSE])
+})
+combined_matrix <- as.matrix(mean_matrix)
+colnames(combined_matrix) <- gsub("_cluster_", ".cluster", colnames(combined_matrix))
+
 #run viper on combined matrix to generate distance matrix--
 #computes the similarity between VIPER signatures across samples
 #Viper similarity enrichment of the top regulators in one signature in the differential protein activity and integrates the two enrichment scores)
-
-dd <- viperSimilarity(combined_matrix, nn = 50, method = c("two.sided"))
+dd <- viperSimilarity(combined_matrix, nn = 1000, method = c("two.sided"))
 
 #optimal clustering
 library(fpc)
@@ -558,70 +721,51 @@ clust <- pamk(data=dd, krange=2:10)$pamobject
 clust$silinfo #silhouette score > 0.25 is considered good (can be used as weight for stouffer integration)
 #generate heatmap ordered by the silhouette score
 df <- as.data.frame(clust$silinfo$widths)
-write.csv(df, file = "MYOD1.integrated.filt.vp.network_sample.indiv.sample.individualclusters.combined_matrix_viper_similarity.silinfo.csv")
 cluster <- rownames(clust$silinfo$widths)
 group <- df$cluster
-
 dd <- dd[match(cluster, rownames(dd)), match(cluster, colnames(dd))]
 annotation <- data.frame(Subcluster = cluster, Group = group)
 rownames(annotation) <- annotation$Subcluster
+cluster <- df$subcluster
+group <- df$cluster
+
+annotation <- data.frame(Subcluster = cluster, Group = group)
+rownames(annotation) <- annotation$Subcluster
+desired_order <- c("differentiated", "transition", "progenitor")
+annotation <- annotation[order(factor(annotation$Group, levels = desired_order)), ]
+dd <- dd[match(annotation$Subcluster, rownames(dd)), match(annotation$Subcluster, colnames(dd))]
+                     
+group_order <- annotation$Group[match(colnames(dd), annotation$Subcluster)]
+gaps_col <- which(diff(as.numeric(factor(group_order, levels = desired_order))) != 0)
+gaps_row <- which(diff(as.numeric(factor(group_order, levels = desired_order))) != 0)
 
 anno.colors <- list(Group = c("differentiated" = "#08519c", "progenitor" = "#e31a1c", "intermediate" = "#6a3d9a"))
 
-paletteLength <- 60
-myColor <- colorRampPalette((rev(brewer.pal(n = 8, name = "RdBu"))))(paletteLength)
-myBreaks <- c(seq(min(dd), 0, length.out = ceiling(paletteLength/2) + 1), 
-              seq(max(dd)/paletteLength, max(dd), length.out = floor(paletteLength/2)))
-pdf("MYOD1.integrated.filt.vp.network_sample.individualclusters.indiv.sample.combined_matrix_viper_similarity_heatmap.top50.pamk.pdf", height = 8, width = 8)
+paletteLength <- 100
+myColor <- colorRampPalette(c("white", "lightcoral", "red", "darkred"))(paletteLength)
+myBreaks <- c(seq(0, 2, length.out = ceiling(paletteLength * 0.2) + 1), 
+              seq(2.01, 5, length.out = ceiling(paletteLength * 0.3)), 
+              seq(5.01, 10, length.out = ceiling(paletteLength * 0.3)), 
+              seq(10.01, max(vpmat, na.rm = TRUE), length.out = ceiling(paletteLength * 0.2)))
+
+pdf("MYOD1_common_ref.viper.sample_network.combined_matrix_viper_similarity_heatmap.all.pamk.pdf", height = 6, width = 8)
 pheatmap(dd, cluster_rows = F, cluster_cols = F, 
          show_rownames = TRUE, show_colnames = TRUE, 
          fontsize_row = 6, fontsize_col = 6,
          color = myColor,
          breaks = myBreaks,
          annotation_col = annotation,
+         annotation_row = annotation,
          annotation_colors = anno.colors,
+         gaps_col = gaps_col,
+         gaps_row = gaps_row,
          main = "Viper Similarity Matrix") 
 dev.off()
-##########################################
 
-differentiated <- c("MYOD1_RMS_475_cluster_3",
-                    "MYOD1_RMS_211_2_cluster_2",
-                    "MYOD1_RMS_41B_cluster_1",
-                    "MYOD1_RMS_3_2_cluster_1",
-                    "MYOD1_RMS_31_2_cluster_1",
-                    "MYOD1_RMS_469_cluster_0")
-progenitor <- c("MYOD1_RMS_41B_cluster_2",
-                "MYOD1_RMS_469_cluster_1",
-                "MYOD1_RMS_41B_cluster_4",
-                "MYOD1_RMS_3_2_cluster_0",
-                "MYOD1_RMS_31_2_cluster_0",
-                "MYOD1_RMS_211_2_cluster_1",
-                "MYOD1_RMS_475_cluster_1",
-                "MYOD1_RMS_475_cluster_2")
-intermediate <- c("MYOD1_RMS_475_cluster_0",
-            "MYOD1_RMS_211_2_cluster_0",
-            "MYOD1_RMS_41B_cluster_0",
-            "MYOD1_RMS_469_cluster_2",
-            "MYOD1_RMS_31_2_cluster_2",
-            "MYOD1_RMS_41B_cluster_3")
-
-table(MYOD1.integrated.vp$sample_cluster)
-
-MYOD1.integrated.vp$cell_state <- NA
-MYOD1.integrated.vp$cell_state[MYOD1.integrated.vp$sample_cluster %in% differentiated] <- "differentiated"
-MYOD1.integrated.vp$cell_state[MYOD1.integrated.vp$sample_cluster %in% progenitor] <- "progenitor"
-# MYOD1.integrated.vp$cell_state[MYOD1.integrated.vp$sample_cluster %in% group3] <- "group3"
-MYOD1.integrated.vp$cell_state[MYOD1.integrated.vp$sample_cluster %in% intermediate] <- "intermediate"
-table(MYOD1.integrated.vp$cell_state)
-
-saveRDS(MYOD1.integrated.vp, "MYOD1.integrated.filt.vp.network.sample_network.indiv.sample.rds")
-##########################################
 ##############################
 #####visualize top MRs in each group###
 setwd("/data/vanderbilt/dermawaj/scRNA/RMS/seurat/ARACNe")
-MYOD1.obj.integrated.cytotrace <- readRDS(file = "MYOD1.obj.filt.integrated.cytotrace.v2.rds")
 cytoGenes <- MYOD1.obj.integrated.cytotrace$cytoGenes
-df <- read.csv("MYOD1.integrated.filt.vp.subclusters.group.csv") %>% arrange(cluster)
 cluster <- df$subcluster
 group <- df$cluster
 
@@ -663,7 +807,6 @@ get_top_genes <- function(matrix, n = 20) {
   return(selected_genes)
 }
 (selected_genes <- get_top_genes(integrated_matrix, n = 15))
-selected_genes <- selected_genes[!selected_genes %in% c("BTG1","SDF4","CRYAB","ZNF556","DGKZ","GRIA2","CENPF")]
 
 filtered_matrix <- integrated_matrix[selected_genes, ]
 rownames(filtered_matrix)
@@ -683,8 +826,6 @@ heatmap1 <- Heatmap(
   as.matrix(heatmap_matrix),
   name = "Activity",
   col = myColor,
-  # column_split = sort(group),
-  # row_split = c(rep("progenitor", 21), rep("myogenic", 21)),
   show_row_names = TRUE,
   show_column_names = TRUE,
   cluster_rows = TRUE,
@@ -700,7 +841,6 @@ heatmap2 <- Heatmap(
   col = colorRamp2(c(min(cytotrace_data), 0, max(cytotrace_data)), c("blue", "white", "red")),
   show_row_names = TRUE,
   show_column_names = TRUE,
-  # row_split = c(rep("progenitor", 21), rep("myogenic", 21)),
   cluster_rows = T,
   cluster_columns = T,
   show_row_dend = F,
@@ -744,26 +884,6 @@ gene_lists <- cell_type_data %>%
 
 regul <- list2regulon1Tail(gene_lists,only_names = T)
 
-combined_matrix <- read.csv("MYOD1.integrated.filt.vp.network_sample.indiv.sample.individualclusters.combined_matrix.mean.csv", row.names = 1)
-stouffersMethod <- function(x, weights) {
-  return(sum(x * weights) / sqrt(sum(weights * weights)))
-}
-df <- read.csv("MYOD1.integrated.filt.vp.subclusters.group.csv")
-cluster <- df$subcluster
-group <- df$cluster
-combined_matrix <- combined_matrix[, match(cluster, colnames(combined_matrix))]
-grouped_clusters <- split(colnames(combined_matrix), group)
-results_list <- list()
-for (group_name in names(grouped_clusters)) {
-  subcluster_names <- grouped_clusters[[group_name]]
-  subcluster_matrix <- combined_matrix[, subcluster_names, drop = FALSE]
-  weights <- rep(1, ncol(subcluster_matrix))
-  integrated_results <- apply(subcluster_matrix, 1, stouffersMethod, weights = weights)
-  results_list[[group_name]] <- integrated_results
-}
-integrated_matrix <- do.call(cbind, results_list)
-
-path_enrich <- aREA(combined_matrix, regul, minsize = 2)
 path_enrich <- aREA(integrated_matrix, regul, minsize = 2) # sign_tab is the matrix of signatures (matrix of mean viper signatures for each of the subclusters)
 pathways.nes <- path_enrich$nes
 
@@ -772,18 +892,6 @@ significant <- apply(pathways.nes.pval, 1, function(x) sum(x <= 0.05))
 pathways.nes.significant <- pathways.nes[which(significant > 0),]                        
 pathways.nes.significant
 heatmap_matrix <- pathways.nes.significant
-
-df <- read.csv("MYOD1.integrated.filt.vp.subclusters.group.csv")
-cluster <- df$subcluster
-group <- df$cluster
-heatmap_matrix <- pathways.nes.significant[, match(cluster, colnames(pathways.nes.significant))]
-
-annotation <- data.frame(Subcluster = cluster, Group = group)
-rownames(annotation) <- annotation$Subcluster
-anno.colors <- list(Group = c("differentiated" = "#08519c", "progenitor" = "#e31a1c", "intermediate" = "#6a3d9a"))
-
-group_order <- annotation$Group[match(colnames(heatmap_matrix), annotation$Subcluster)]
-gaps_col <- which(diff(as.numeric(factor(group_order))) != 0)
 
 paletteLength <- 60 
 myColor <- colorRampPalette((rev(brewer.pal(n = 8, name = "RdBu"))))(paletteLength)
@@ -799,19 +907,10 @@ pheatmap(heatmap_matrix,
           fontsize_col = 6,
           color = myColor,
           breaks = myBreaks,
-          annotation_col = annotation,
-          annotation_colors = anno.colors,
-          gaps_col = gaps_col,
           main = "")
 ##########################################
 ###CytoTRACE###
 ###MYOD1.integrated.vp#######
-setwd("/data/vanderbilt/dermawaj/scRNA/RMS/seurat/ARACNe")
-MYOD1.integrated.vp <- readRDS("MYOD1.integrated.filt.vp.network.sample_network.indiv.sample.v2.rds")
-MYOD1.integrated.vp.cytotrace <- readRDS("MYOD1.integrated.filt.vp.network.sample_network.indiv.sample.cytotrace.rds")
-MYOD1.obj.integrated.cytotrace <- readRDS("MYOD1.obj.filt.integrated.cytotrace.v2.rds")
-MYOD1.obj.integrated <- readRDS("MYOD1.obj.filt.integrated.v2.rds")
-
 ##cytotrace sample by sample###
 MYOD1.subset.obj.list <- readRDS(file = "MYOD1.subset.obj.list.rds")
 for (i in seq_along(MYOD1.subset.obj.list)) {
@@ -843,7 +942,7 @@ dev.off()
 Idents(MYOD1.integrated.vp) <- MYOD1.integrated.vp$cell_state
 metadata <- MYOD1.integrated.vp@meta.data
 
-group_colors <- c("differentiated" = "#08519c", "progenitor" = "#e31a1c", "intermediate" = "#6a3d9a")
+group_colors <- c("differentiated" = "#08519c", "progenitor" = "#e31a1c", "transition" = "#6a3d9a")
 
 pairwise_comparisons <- pairwise.t.test(metadata$CytoTRACE, metadata$group, p.adjust.method = "bonferroni")
 comparisons1 <- list(
@@ -864,7 +963,53 @@ pdf(paste0('MYOD1.integrated.filt.vp.network.sample_network.indiv.sample.viper_s
     stat_compare_means(comparisons = comparisons1, method = "t.test", p.adjust.method = "bonferroni", label = "p.signif") +
     theme_minimal() #+
 dev.off()
+
+####cell cycle scoring######
+# A list of cell cycle markers, from Tirosh et al, 2015, is loaded with Seurat.  We can
+# segregate this list into markers of G2/M phase and markers of S phase
+s.genes <- cc.genes$s.genes
+g2m.genes <- cc.genes$g2m.genes
+# assign cell-cycle scoring
+MYOD1.obj.integrated <- CellCycleScoring(object = MYOD1.obj.integrated, 
+                        s.features = s.genes, g2m.features = g2m.genes, set.ident = FALSE)
+
+MYOD1.subset.obj.list <- readRDS(file = "MYOD1.subset.obj.list.rds")
+for (i in seq_along(MYOD1.subset.obj.list)) {
+  seurat_obj <- MYOD1.subset.obj.list[[i]]
+  seurat_obj <- SCTransform(seurat_obj, verbose = T)
+  seurat_obj <- CellCycleScoring(seurat_obj, s.features = s.genes, g2m.features = g2m.genes)
+  s_score <- seurat_obj@meta.data$S.Score
+  g2m_score <- seurat_obj@meta.data$G2M.Score
+  new_colnames <- paste0(colnames(seurat_obj), "_", i) 
+  # Add S.Score and G2M.Score to MYOD1.obj.integrated metadata
+  MYOD1.obj.integrated@meta.data[new_colnames, "S.Score"] <- s_score
+  MYOD1.obj.integrated@meta.data[new_colnames, "G2M.Score"] <- g2m_score
+}
               
+MYOD1.obj.integrated$sample_cluster <- MYOD1.integrated.vp$sample_cluster
+metadata <- MYOD1.obj.integrated@meta.data
+
+pdf(paste0('MYOD1.obj.filt.integrated.clusters.sample.cellcycle.pdf'), height = 10, width = 15)
+  ggplot(metadata, aes(x = sample_cluster, y = S.Score, fill = sample_cluster)) +
+    geom_violin(trim = FALSE, color = "black") +
+    geom_boxplot(width = 0.1, color = "black", alpha = 0.5) +
+    scale_fill_igv() +
+    labs(title = "",
+        x = "Cluster",
+        y = "S Score") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+  ggplot(metadata, aes(x = sample_cluster, y = G2M.Score, fill = sample_cluster)) +
+    geom_violin(trim = FALSE, color = "black") +
+    geom_boxplot(width = 0.1, color = "black", alpha = 0.5) +
+    scale_fill_igv() +
+    labs(title = "",
+        x = "Cluster",
+        y = "G2M Score") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+dev.off()
+
 ##########################################
 ###MYOD1 bulk##########
 #Normalize the bulk gene expression by log2CPM 
@@ -933,7 +1078,6 @@ pheatmap(vpsim, cluster_rows = FALSE, cluster_cols = FALSE,
 
 #compare with integrated sc matrix###
 combined_matrix <- read.csv("MYOD1.integrated.filt.vp.network_sample.indiv.sample.individualclusters.combined_matrix.mean.csv", row.names = 1)
-df <- read.csv("MYOD1.integrated.filt.vp.subclusters.group.csv") %>% arrange(cluster)
 cluster <- df$subcluster
 group <- df$cluster
 combined_matrix <- combined_matrix[, match(cluster, colnames(combined_matrix))]
@@ -954,7 +1098,7 @@ for (group_name in names(grouped_clusters)) {
 }
 integrated_sc_matrix <- do.call(cbind, results_list)
 
-vpmat <- read.csv("/data/vanderbilt/dermawaj/scRNA/RMS/MYOD1_bulk/MYOD1_bulk_viper.csv", row.names = 1)
+vpmat <- read.csv("/path/MYOD1_bulk_viper.csv", row.names = 1)
 vpsim <- viperSimilarity(vpmat, nn = 100, method = c("two.sided"))
 stouffersMethod <- function(x, weights) {
   return(sum(x * weights) / sqrt(sum(weights * weights)))
@@ -1001,159 +1145,4 @@ pheatmap(vpsim, cluster_rows = T, cluster_cols = T,
          breaks = myBreaks,
          main = "Viper Similarity Matrix") 
 
-##############################
-###Cell State Signature Enrichment###
-combined_matrix <- read.csv("MYOD1.integrated.filt.vp.network_sample.indiv.sample.individualclusters.combined_matrix.mean.csv", row.names = 1)
-df <- read.csv("MYOD1.integrated.filt.vp.subclusters.group.csv") %>% arrange(cluster)
-cluster <- df$subcluster
-group <- df$cluster
-combined_matrix <- combined_matrix[, match(cluster, colnames(combined_matrix))]
-combined_matrix <- combined_matrix[!grepl("RPL|RPS", rownames(combined_matrix)), ]
-
-stouffersMethod <- function(x, weights) {
-  return(sum(x * weights) / sqrt(sum(weights * weights)))
-}
-combined_matrix <- combined_matrix[, match(cluster, colnames(combined_matrix))]
-grouped_clusters <- split(colnames(combined_matrix), group)
-results_list <- list()
-for (group_name in names(grouped_clusters)) {
-  subcluster_names <- grouped_clusters[[group_name]]
-  subcluster_matrix <- combined_matrix[, subcluster_names, drop = FALSE]
-  weights <- rep(1, ncol(subcluster_matrix))
-  integrated_results <- apply(subcluster_matrix, 1, stouffersMethod, weights = weights)
-  results_list[[group_name]] <- integrated_results
-}
-integrated_sc_matrix <- do.call(cbind, results_list)
-
-#create regulon from top 50 and bottom 50 MRs from sc viper matrix integrated by cell state
-get_top_genes <- function(vector, n = 50) {
-  top_genes <- names(sort(vector, decreasing = TRUE)[seq_len(min(n, length(vector)))])
-  # bottom_genes <- names(sort(vector, decreasing = FALSE)[seq_len(min(n, length(vector)))])
-  return(top_genes)
-}
-gene_lists <- list()
-cell_states <- c("differentiated", "intermediate", "progenitor")
-for (state in cell_states) {
-  state_matrix <- integrated_sc_matrix[, grepl(state, colnames(integrated_sc_matrix))]
-  gene_lists[[state]] <- get_top_genes(state_matrix, n = 50)
-}
-
-list2regulon1Tail <- function(x, only_names = FALSE) {
-  res <- lapply(x,function(x){
-    tfmode <- rep(1, length(x))
-    if(only_names==F){names(tfmode) <- names(x)}
-    else{names(tfmode) <- x}
-    list(tfmode=tfmode, likelihood=rep(1, length(tfmode)))
-    })
-    class(res) <- "regulon"
-    res
-}
-
-regul <- list2regulon1Tail(gene_lists, only_names = T)
-
-integrated_matrix <- read.csv("MYOD1_bulk.integrated.viper.csv", row.names = 1)
-vpmat <- read.csv("/path/RMS/MYOD1_bulk/MYOD1_bulk_viper.csv", row.names = 1)
-common_genes <- intersect(rownames(integrated_sc_matrix), rownames(vpmat))
-integrated_matrix <- integrated_matrix[common_genes, ]
-vpmat <- vpmat[common_genes, ]
-
-path_enrich <- aREA(vpmat, regul, minsize = 2) # sign_tab is the matrix of signatures (matrix of mean viper signatures for each of the subclusters)
-pathways.nes <- path_enrich$nes
-heatmap_matrix <- pathways.nes
-
-df2 <- read.csv("MYOD1_bulk_viperSimilarity_cluster.csv")
-setwd("/path/RMS/MYOD1_bulk")
-df <- read.csv("MYOD1_bulk.csv") %>% 
-       left_join(df2, by = c("ID" = "X")) %>%
-       arrange(cluster)
-df$Type <- factor(df$Type, levels = c("Biopsy", "Resection", "Local relapse", "Metastasis", "Unknown"))
-cluster <- df$ID
-group <- df$cluster
-
-heatmap_matrix <- heatmap_matrix[, match(df$ID, colnames(heatmap_matrix))]
-
-annotation <- data.frame(Sample = df$Type, Treatment = df$Treatment, Group = df$cluster, Subcluster = df$ID)
-rownames(annotation) <- df$ID
-anno.colors <- list(Sample = c("Biopsy" = "#66c2a4", "Resection" = "#006d2c", "Local relapse" = "#e41a1c", "Metastasis" = "#984ea3",
-                               "Unknown" = "#d9d9d9"),
-                    Treatment = c("Non-treated" = "#0571b0", "Post-treatment" = "#8c510a", "Unknown" = "#d9d9d9"),
-                    Group = c("1" = "#1a9850", "2" = "#08519c", "3" = "#e31a1c"))
-
-group_order <- annotation$Group[match(colnames(heatmap_matrix), annotation$Subcluster)]
-gaps_col <- which(diff(as.numeric(factor(group_order))) != 0)
-
-paletteLength <- 60 
-myColor <- colorRampPalette((rev(brewer.pal(n = 8, name = "RdBu"))))(paletteLength)
-myBreaks <- c(seq(min(heatmap_matrix), 0, length.out = ceiling(paletteLength/2) + 1), 
-              seq(max(heatmap_matrix)/paletteLength, max(heatmap_matrix), length.out = floor(paletteLength/2))) 
-
-pheatmap(heatmap_matrix, 
-          cluster_rows = F, 
-          treeheight_row = 0, 
-          cluster_cols = FALSE, 
-          show_rownames = TRUE, 
-          show_colnames = TRUE, 
-          fontsize_row = 8, 
-          fontsize_col = 6,
-          color = myColor,
-          breaks = myBreaks,
-          annotation_col = annotation,
-          annotation_colors = anno.colors,
-          gaps_col = gaps_col,
-          main = "")
 ############################################################################
-####cell cycle scoring######
-setwd("/path/scRNA/RMS/seurat/ARACNe")
-MYOD1.obj.integrated <- readRDS(file = "MYOD1.obj.filt.integrated.v2.rds")
-MYOD1.integrated.vp <- readRDS("MYOD1.integrated.filt.vp.network.sample_network.indiv.sample.v2.rds")
-
-common_cells <- intersect(colnames(MYOD1.obj.integrated), colnames(MYOD1.integrated.vp))
-MYOD1.obj.integrated <- subset(MYOD1.obj.integrated, cells = common_cells)
-MYOD1.integrated.vp <- subset(MYOD1.integrated.vp, cells = common_cells)
-# A list of cell cycle markers, from Tirosh et al, 2015, is loaded with Seurat.  We can
-# segregate this list into markers of G2/M phase and markers of S phase
-s.genes <- cc.genes$s.genes
-g2m.genes <- cc.genes$g2m.genes
-# assign cell-cycle scoring
-MYOD1.obj.integrated <- CellCycleScoring(object = MYOD1.obj.integrated, 
-                        s.features = s.genes, g2m.features = g2m.genes, set.ident = FALSE)
-
-MYOD1.subset.obj.list <- readRDS(file = "MYOD1.subset.obj.list.rds")
-for (i in seq_along(MYOD1.subset.obj.list)) {
-  seurat_obj <- MYOD1.subset.obj.list[[i]]
-  seurat_obj <- SCTransform(seurat_obj, verbose = T)
-  seurat_obj <- CellCycleScoring(seurat_obj, s.features = s.genes, g2m.features = g2m.genes)
-  s_score <- seurat_obj@meta.data$S.Score
-  g2m_score <- seurat_obj@meta.data$G2M.Score
-  new_colnames <- paste0(colnames(seurat_obj), "_", i) 
-  # Add S.Score and G2M.Score to MYOD1.obj.integrated metadata
-  MYOD1.obj.integrated@meta.data[new_colnames, "S.Score"] <- s_score
-  MYOD1.obj.integrated@meta.data[new_colnames, "G2M.Score"] <- g2m_score
-}
-saveRDS(MYOD1.obj.integrated, file = "MYOD1.obj.filt.integrated.v2.rds")
-              
-MYOD1.obj.integrated$sample_cluster <- MYOD1.integrated.vp$sample_cluster
-metadata <- MYOD1.obj.integrated@meta.data
-
-pdf(paste0('MYOD1.obj.filt.integrated.clusters.sample.cellcycle.pdf'), height = 10, width = 15)
-  ggplot(metadata, aes(x = sample_cluster, y = S.Score, fill = sample_cluster)) +
-    geom_violin(trim = FALSE, color = "black") +
-    geom_boxplot(width = 0.1, color = "black", alpha = 0.5) +
-    scale_fill_igv() +
-    labs(title = "",
-        x = "Cluster",
-        y = "S Score") +
-    theme_minimal() +
-    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
-  ggplot(metadata, aes(x = sample_cluster, y = G2M.Score, fill = sample_cluster)) +
-    geom_violin(trim = FALSE, color = "black") +
-    geom_boxplot(width = 0.1, color = "black", alpha = 0.5) +
-    scale_fill_igv() +
-    labs(title = "",
-        x = "Cluster",
-        y = "G2M Score") +
-    theme_minimal() +
-    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
-dev.off()
-
-##########################################
