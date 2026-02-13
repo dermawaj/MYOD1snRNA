@@ -9,8 +9,7 @@ MYOD1_oncoprint <- MYOD1_oncoprint %>%
          MYOD1, IGF2, PIK3CA, PTEN, AKT, PIK3R3, PIK3C2G, NRAS, NF1, NF2, BCOR, FGFR4, 
          MDM2, CDK4, 
          MGA, CDKN2A, CHEK2, GATA3, SMARCB1, ARID1A, NOTCH4, 
-         chr1q,	chr5,	chr10,	chr11p,	chr13q,	chr16q,	chr19p,	chr20) %>% 
-  filter(SAMPLE_ID != "P-0086519-T01-IM7")
+         chr1q,	chr5,	chr10,	chr11p,	chr13q,	chr16q,	chr19p,	chr20) 
 
 MYOD1_oncoprint <- MYOD1_oncoprint %>% 
   filter(Treatment == "Non-treated")
@@ -91,12 +90,10 @@ col_mut <- c("nonsynonymous_SNV"="#005a32",
              "stoploss_SNV"="#737373",
              "frameshift_insertion" ="#de2d26",
              "frameshift_deletion"="#67001f",
-             # "upstream"="#542788",
              "splicing"="#542788",
              "INTRAGENIC"="#2166ac", 
              "Amplification"="#b2182b",
-             "Deletion"="#2166ac"#,
-             # "structural_variant" = "#88419d"
+             "Deletion"="#2166ac"#
 )
 
 alter_fun <- list(
@@ -189,16 +186,9 @@ MYOD1_mut_mat <- oncoPrint(MYOD1_mut_mat,
                            width = unit(0.2 * ncol(MYOD1_mut_mat), "cm"),
                            bottom_annotation = MYOD1_ha2,
                            top_annotation = MYOD1_ha1,
-                           # top_annotation = HeatmapAnnotation(cbar = anno_oncoprint_barplot(show_fraction = FALSE,
-                           #                                                                  height = unit(1.0, "cm"),
-                           #                                                                  ylim = c(0, 10))),
                            right_annotation = NULL,
-                           # right_annotation = rowAnnotation(rbar = anno_oncoprint_barplot(show_fraction = TRUE,
-                           #                                                                width = unit(1, "cm"),
-                           #                                                                ylim = c(0,1))),
                            show_pct = TRUE, show_row_names = T,
                            row_names_side = "right", row_names_gp = gpar(fontsize = 10, fontface = "italic"),
-                           #row_title = "Alterations",
                            row_title_gp = gpar(fontsize = 10),
                            row_order = 1:nrow(MYOD1_mut_mat),
                            row_title_rot = 0, row_title_side = "left"
@@ -297,7 +287,7 @@ library(circlize)
 library(ComplexHeatmap)
 
 MYOD1_oncoprint <- read.csv("path/MYOD1_oncoprint.csv")
-NULL
+
 ####MYOD1 copy number clustering####
 #download copy number .seg profile from cbioportal for all MYOD1 samples
 MYOD1_copynumber <- read.delim("path/MYOD1_copynumber.seg")
@@ -325,7 +315,6 @@ MYOD1_cn_df_wide <- MYOD1_cn_df %>%
   pivot_wider(names_from = c(chrom,start,end),
               names_sep = ".",
               values_from = seg_mean) %>% 
-  filter(SAMPLE_ID != "P-0086519-T01-IM7") %>% 
   column_to_rownames("SAMPLE_ID")
 
 MYOD1_cn_mat <- matrix(as.numeric(unlist(MYOD1_cn_df_wide)),nrow=nrow(MYOD1_cn_df_wide))
