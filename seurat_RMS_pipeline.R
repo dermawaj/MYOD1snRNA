@@ -299,7 +299,7 @@ for(i in seq_along(sample)){
   m2 <- m %>% dplyr::select(-gene)
   saveRDS(m2, file = paste0(sample[i], '_cpm.mat.rds'))
 }
-#run ARACNe (run_bootstraps.sh, network_final.sh) on HPC
+#run ARACNe (ARACNe.sh) on HPC
 sample <- c("MYOD1_RMS_3_2", "MYOD1_RMS_31_2", "MYOD1_RMS_41B", "MYOD1_RMS_211_2", "MYOD1_RMS_469", "MYOD1_RMS_475","MYOD1_PDX_PRMS")
 for (i in sample) {
   setwd("/path/scRNA/RMS/seurat/ARACNe")
