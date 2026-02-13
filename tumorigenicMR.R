@@ -19,7 +19,7 @@ GES_scaled <- function(dset, ref){
   return(dset.ges)
 }
 
-muscle.raw.obj <- readRDS(file = "/path/scRNA/RMS/9b34eb5c-1fb2-46c5-9fe4-d90a2e5f7c4b.rds")
+muscle.raw.obj <- readRDS(file = "/path/scRNA/RMS/tabulaSapiens_muscle.rds")
 muscle.dat <- as.matrix(muscle.raw.obj@assays$RNA@counts)
 muscle.cpm <- CPM_normalization(muscle.dat)
 rm(muscle.dat)
@@ -50,9 +50,7 @@ for (s in seq_along(sample)) {
   dat <- GES_scaled(MYOD1.cpm, muscle.cpm) #differential gene expression relative to muscle
   rm(MYOD1.dat, MYOD1.cpm)
   gc()
-  # MYOD1_muscle_diffexp[[sample[s]]] <- MYOD1.ges
   colnames(dat) <- paste0(colnames(dat), "_", s)
-  # vp <- viper(dat, nets, method = 'none')
   indices <- seq(1, ncol(dat), by = 400)
   seurat_viper_list <- list()
   for (i in 1:(length(indices) - 1)) {
@@ -98,9 +96,7 @@ for (cluster in sample_clusters) {
 }
 combined_results <- do.call(cbind, results_list)
 combined_matrix <- as.matrix(combined_results) 
-write.csv(combined_matrix, file = "MYOD1_muscle_diffexp.viper.combined_matrix.mean.csv", row.names = TRUE)
 
-combined_matrix <- read.csv("MYOD1_muscle_diffexp.viper.combined_matrix.mean.csv", row.names = 1)
 stouffersMethod <- function(x, weights) {
   return(sum(x * weights) / sqrt(sum(weights * weights)))
 }
@@ -119,7 +115,6 @@ for (group_name in names(grouped_clusters)) {
   results_list[[group_name]] <- integrated_results
 }
 integrated_matrix <- do.call(cbind, results_list)
-write.csv(integrated_matrix, file = "MYOD1_muscle_diffexp.viper.cell_state.mean.integrated.csv", row.names = TRUE)
                      
 ##topMRs###
 get_top_genes <- function(matrix, n = 20) {
@@ -133,7 +128,8 @@ get_top_genes <- function(matrix, n = 20) {
   })))
   return(selected_genes)
 }
-(selected_genes <- get_top_genes(combined_matrix, n = 500))
+combined_matrix <- integrated_matrix
+(selected_genes <- get_top_genes(combined_matrix, n = 20))
 
                      
 ############
@@ -141,56 +137,38 @@ get_top_genes <- function(matrix, n = 20) {
 # convert NES scores to pvalues ( < 10 ^-5 converted to log scale)
 # OncoTarget analysis for patients, PDX, and cell lines
 # Subset viper matrix for 180 regulators that have known FDA-approved or late-stage experimental drugs directly targeting them
-setwd("/path/scRNA/RMS/seurat/ARACNe")
-# vp <- read.csv("MYOD1_subcluster_muscle_diffexp_viper.csv", row.names = 1)
-# OncoTarget <- read.csv("/path/scRNA/functions/oncotarget.csv")
-# vp_ot <- vp[rownames(vp) %in% OncoTarget$Target,]
-# write.csv(vp_ot, file = "MYOD1_subcluster_muscle_diffexp_viper_oncotarget.csv")
-vp_ot <- read.csv("MYOD1_subcluster_muscle_diffexp_viper_gene_oncotarget.csv", row.names = 1)
 
-vpmat.oncotarget.pval <- apply(vp_ot, 2, function(x) -log10(p.adjust(pnorm(x, lower.tail=FALSE),method='bonferroni')))
-write.csv(vpmat.oncotarget.pval, "MYOD1_subcluster_muscle_diffexp_viper_oncotarget_log10pval.csv")
+filtered_matrix <- combined_matrix[selected_genes, ]
+rownames(filtered_matrix)
 
-tmp10 <- vpmat.oncotarget.pval >= 1 # at a fdr-corrected p-value of < 10E-1
-pos <- rowSums(tmp10) >= 1 #can be 1, significant in at least one sample
-tmp <- filterRowMatrix(vpmat.oncotarget.pval,pos)
-
-tmp <- tmp[order(rowMeans(tmp), decreasing = TRUE), ]
-colnames(tmp) <- gsub("\\.\\.\\.muscle", "", colnames(tmp))
-colnames(tmp) <- gsub("_(cluster)_", ".\\1", colnames(tmp))
-
-df <- read.csv("MYOD1.integrated.filt.vp.subclusters.group.csv")
-df <- df[!grepl("MYOD1_PDX", df$subcluster), ]
-cluster <- df$subcluster
-group <- df$cluster
-tmp <- tmp[, match(cluster, colnames(tmp))]
-
-annotation <- data.frame(Subcluster = cluster, Group = group)
-rownames(annotation) <- annotation$Subcluster
-anno.colors <- list(Group = c("differentiated" = "#08519c", "progenitor" = "#e31a1c", "intermediate" = "#6a3d9a"))
-
-group_order <- annotation$Group[match(colnames(tmp), annotation$Subcluster)]
-gaps_col <- which(diff(as.numeric(factor(group_order))) != 0)
+OncoTarget <- read.csv("/path/oncotarget.csv")
+top_dat <- filtered_matrix[rownames(filtered_matrix) %in% OncoTarget$Target,]
+rownames(top_dat)
+vpmat.oncotarget.pval <- apply(top_dat, 2, function(x) -log10(p.adjust(pnorm(x, lower.tail=FALSE),method='bonferroni')))
+vpmat <- vpmat.oncotarget.pval >= 1 # at a fdr-corrected p-value of < 10E-1
+pos <- rowSums(vpmat) >= 1 #can be 1, significant in at least one sample
+vpmat <- filterRowMatrix(vpmat.oncotarget.pval,pos)
+vpmat <- vpmat[order(rowMeans(vpmat), decreasing = TRUE), ]
 
 paletteLength <- 100
-myColor <- colorRampPalette(c("white", "red"))(paletteLength)
-myBreaks <- c(seq(min(tmp, na.rm = TRUE), 1, length.out = ceiling(paletteLength / 2) + 1), 
-              seq(1 + 1e-6, max(tmp, na.rm = TRUE), length.out = floor(paletteLength / 2)))
+myColor <- colorRampPalette(c("white", "lightcoral", "red", "darkred"))(paletteLength)
+myBreaks <- c(seq(0, 2, length.out = ceiling(paletteLength * 0.2) + 1), 
+              seq(2.01, 5, length.out = ceiling(paletteLength * 0.3)), 
+              seq(5.01, 10, length.out = ceiling(paletteLength * 0.3)), 
+              seq(10.01, max(vpmat, na.rm = TRUE), length.out = ceiling(paletteLength * 0.2)))
 
-pdf("MYOD1_subcluster_muscle_diffexp_viper_gene_oncotarget_heatmap_Significant10Percent.pdf", height = 5, width = 7)
-pheatmap(tmp, 
-          cluster_rows = TRUE, 
+pdf("MYOD1_muscle_diffexp_oncotarget_integrated_heatmap.pval.pdf", height = 5, width = 3)
+pheatmap(vpmat, 
+          cluster_rows = F, 
           treeheight_row = 0, 
           cluster_cols = F, 
           show_rownames = TRUE, 
           show_colnames = TRUE, 
           fontsize_row = 8, 
           fontsize_col = 6,
-          color = myColor,
+          color = myColor,  
           breaks = myBreaks,
-          annotation_col = annotation,
-          annotation_colors = anno.colors,
-          gaps_col = gaps_col,
+          show_row_dend = F,
           main = "")
 dev.off()
 
@@ -206,7 +184,7 @@ nets <- lapply(filenames, readRDS)
 names(nets) <- sample
 
 #normal muscle (Tabula Sapiens)
-muscle.obj <- readRDS(file = "/path/scRNA/RMS/9b34eb5c-1fb2-46c5-9fe4-d90a2e5f7c4b.rds")
+muscle.obj <- readRDS(file = "/path/scRNA/RMS/tabulaSapiens_muscle.rds.rds")
 muscle.obj.dat <- as.matrix(muscle.obj@assays$RNA@counts)
 colnames(muscle.obj.dat) <- colnames(muscle.obj)
 rownames(muscle.obj.dat) <- rownames(muscle.obj)
@@ -254,40 +232,52 @@ gene_hgnc <- getBM(filters= c("ensembl_gene_id"), attributes= c("ensembl_gene_id
 hgnc <- gene_hgnc$hgnc_symbol[match(genes, gene_hgnc$ensembl_gene_id)]
 row.names(vpmat) <- hgnc
 
-write.csv(vpmat, file = "MYOD1_bulk_vs_muscle_diffexp_viper.csv", row.names = TRUE)
-
-
-###heatmap###
-vpmat <- read.csv("MYOD1_bulk_vs_muscle_diffexp_viper.csv", row.names = 1)
-df <- read.csv("MYOD1_bulk.csv") %>% arrange(Type, Treatment)
-df$Type <- factor(df$Type, levels = c("Biopsy", "Resection", "Local relapse", "Metastasis", "Unknown"))
-
-vpmat <- vpmat[, match(df$ID, colnames(vpmat))]
-
-annotation <- data.frame(Sample = df$Type, Treatment = df$Treatment)
-rownames(annotation) <- df$ID
-anno.colors <- list(Sample = c("Biopsy" = "#66c2a4", "Resection" = "#006d2c", "Local relapse" = "#e41a1c", "Metastasis" = "#984ea3",
-                               "Unknown" = "#d9d9d9"),
-                    Treatment = c("Non-treated" = "#0571b0", "Post-treatment" = "#8c510a", "Unknown" = "#d9d9d9"))
-
-# group_order <- annotation$Sample[match(colnames(vpmat), annotation$ID)]
-# gaps_col <- which(diff(as.numeric(factor(group_order))) != 0)
-
 rows_to_remove <- grep("^RPS|^RPL", rownames(vpmat), value = TRUE)
 vpmat <- vpmat[!rownames(vpmat) %in% rows_to_remove, ]
-gene_variances <- apply(vpmat, 1, var)
-top50_genes <- names(sort(gene_variances, decreasing = TRUE))[1:40]
-top50_vp <- vpmat[top50_genes, ]
-top_dat <- as.matrix(top50_vp)
-# Create the heatmap
-paletteLength <- 60
-myColor <- colorRampPalette(rev(brewer.pal(n = 8, name = "RdBu")))(paletteLength)
-myBreaks <- c(seq(min(top_dat), 0, length.out = ceiling(paletteLength / 2) + 1), 
-              seq(max(top_dat) / paletteLength, max(top_dat), length.out = floor(paletteLength / 2)))
-pdf("MYOD1_bulk_vs_muscle_diffexp_genes_viper_heatmap.v2.pdf", height = 8, width = 8)
-pheatmap(top_dat, 
-         cluster_rows = TRUE, 
-         cluster_cols = TRUE, 
+
+###########
+###Oncotarget#####
+# convert NES scores to pvalues ( < 10 ^-5 converted to log scale)
+# OncoTarget analysis for patients, PDX, and cell lines
+# Subset viper matrix for 180 regulators that have known FDA-approved or late-stage experimental drugs directly targeting them
+
+get_top_genes <- function(matrix, n = 20) {
+  selected_genes <- unique(unlist(lapply(seq_len(ncol(matrix)), function(i) {
+    col_data <- matrix[, i]
+    names(col_data) <- rownames(matrix)
+    top_genes <- names(sort(col_data, decreasing = TRUE)[seq_len(min(n, length(col_data)))])
+    print(top_genes)
+    return(top_genes)
+  })))
+  return(selected_genes)
+}
+(selected_genes <- get_top_genes(vpmat, n = 20))
+selected_genes
+
+filtered_matrix <- vpmat[selected_genes, ]
+filtered_matrix <- vpmat
+rownames(filtered_matrix)
+
+OncoTarget <- read.csv("/path/oncotarget.csv")
+top_dat <- filtered_matrix[rownames(filtered_matrix) %in% OncoTarget$Target,]
+rownames(top_dat)
+vpmat.oncotarget.pval <- apply(top_dat, 2, function(x) -log10(p.adjust(pnorm(x, lower.tail=FALSE),method='bonferroni')))
+vpmat <- vpmat.oncotarget.pval >= 1 # at a fdr-corrected p-value of < 10E-1
+pos <- rowSums(vpmat) >= 1 #can be 1, significant in at least one sample
+vpmat <- filterRowMatrix(vpmat.oncotarget.pval,pos)
+vpmat <- vpmat[order(rowMeans(vpmat), decreasing = TRUE), ]
+
+paletteLength <- 100
+myColor <- colorRampPalette(c("white", "lightcoral", "red", "darkred"))(paletteLength)
+myBreaks <- c(seq(0, 2, length.out = ceiling(paletteLength * 0.2) + 1), 
+              seq(2.01, 5, length.out = ceiling(paletteLength * 0.3)), 
+              seq(5.01, 10, length.out = ceiling(paletteLength * 0.3)), 
+              seq(10.01, max(vpmat, na.rm = TRUE), length.out = ceiling(paletteLength * 0.2)))
+
+pdf("MYOD1_bulk_vs_muscle_diffexp_genes_viper_oncotarget_heatmap.pval.pdf", height = 5, width = 8)
+pheatmap(vpmat, 
+         cluster_rows = F, 
+         cluster_cols = F, 
          show_rownames = TRUE, 
          show_colnames = TRUE, 
          fontsize_row = 6, 
@@ -296,59 +286,8 @@ pheatmap(top_dat,
          breaks = myBreaks,
          annotation_col = annotation,
          annotation_colors = anno.colors,
-         #  gaps_col = gaps_col,
+         gaps_col = gaps_col,
          main = "")
-dev.off()
-###########
-###Oncotarget#####
-# convert NES scores to pvalues ( < 10 ^-5 converted to log scale)
-# OncoTarget analysis for patients, PDX, and cell lines
-# Subset viper matrix for 180 regulators that have known FDA-approved or late-stage experimental drugs directly targeting them
-# setwd("/path/scRNA/RMS/seurat/ARACNe")
-setwd("/path/scRNA/RMS/MYOD1_bulk")
-vp <- read.csv("MYOD1_bulk_vs_muscle_diffexp_viper.csv", row.names = 1)
-OncoTarget <- read.csv("/path/scRNA/functions/oncotarget.csv")
-vp_ot <- vp[rownames(vp) %in% OncoTarget$Target,]
-write.csv(vp_ot, file = "MYOD1_bulk_muscle_diffexp_viper_oncotarget.csv")
-
-vpmat.oncotarget.pval <- apply(vp_ot, 2, function(x) -log10(p.adjust(pnorm(x, lower.tail=FALSE),method='bonferroni')))
-write.csv(vpmat.oncotarget.pval, "MYOD1_bulk_muscle_diffexp_viper_oncotarget_log10pval.csv")
-
-# PDF of a clustered heatmap including all targetable proteins that were significant in at least one sample 
-# at a fdr-corrected p-value of < 10E-5
-vpmat <- vpmat.oncotarget.pval >= 1 # at a fdr-corrected p-value of < 10E-1
-pos <- rowSums(vpmat) >= 1 #can be 1, significant in at least one sample
-vpmat <- filterRowMatrix(vpmat.oncotarget.pval,pos)
-vpmat <- vpmat[order(rowMeans(vpmat), decreasing = TRUE), ]
-
-df <- read.csv("MYOD1_bulk.csv") %>% arrange(Type, Treatment)
-df$Type <- factor(df$Type, levels = c("Biopsy", "Resection", "Local relapse", "Metastasis", "Unknown"))
-
-vpmat <- vpmat[, match(df$ID, colnames(vpmat))]
-
-annotation <- data.frame(Sample = df$Type, Treatment = df$Treatment)
-rownames(annotation) <- df$ID
-anno.colors <- list(Sample = c("Biopsy" = "#66c2a4", "Resection" = "#006d2c", "Local relapse" = "#e41a1c", "Metastasis" = "#984ea3",
-                               "Unknown" = "#d9d9d9"),
-                    Treatment = c("Non-treated" = "#0571b0", "Post-treatment" = "#8c510a", "Unknown" = "#d9d9d9"))
-
-paletteLength <- 100
-myColor <- colorRampPalette(c("blue", "white", "red"))(paletteLength)
-myBreaks <- c(seq(min(vpmat, na.rm=TRUE), 1, length.out = ceiling(paletteLength / 2) + 1), 
-              seq(1 + 1e-6, max(vpmat, na.rm=TRUE), length.out = floor(paletteLength / 2)))
-
-pdf("MYOD1_bulk_muscle_diffexp_viper_oncotarget_heatmap_Significant10Percent.v3.pdf", height = 4, width = 6)
-pheatmap(vpmat, 
-         cluster_rows = TRUE, 
-         cluster_cols = FALSE, 
-         show_rownames = TRUE, 
-         show_colnames = TRUE, 
-         fontsize_row = 8, 
-         fontsize_col = 6,
-         annotation_col = annotation,
-         annotation_colors = anno.colors,
-         color = myColor,
-         breaks = myBreaks)
 dev.off()
 
 ###########
